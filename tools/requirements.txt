@@ -1,4 +1,14 @@
 # MicroReactor Tools Dependencies
 # Install with: pip install -r requirements.txt
 
-pyserial>=3.5
+# Core dependencies
+pyserial>=3.5           # Serial communication
+
+# GUI (Reactor Studio & Scope)
+PySide6>=6.5.0          # Qt for Python
+
+# Optional: Enhanced plotting for Scope
+pyqtgraph>=0.13.0       # Real-time plotting
+
+# Optional: ELF parsing for Crash Analyzer
+# pyelftools>=0.29      # Uncomment if you need symbol resolution
