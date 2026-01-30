@@ -1,0 +1,18 @@
+# MicroReactor Pipe Example - SDK Configuration Defaults
+
+# Enable logging
+CONFIG_UR_ENABLE_LOGGING=y
+CONFIG_UR_LOG_LEVEL=3
+
+# Enable pipes
+CONFIG_UR_PIPE_ENABLE=y
+CONFIG_UR_PIPE_DEFAULT_SIZE=512
+
+# Timestamps
+CONFIG_UR_ENABLE_TIMESTAMPS=y
+
+# Console
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# FreeRTOS
+CONFIG_FREERTOS_HZ=1000

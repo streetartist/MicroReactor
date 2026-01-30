@@ -1,0 +1,21 @@
+# MicroReactor Basic Example - SDK Configuration Defaults
+
+# Enable MicroReactor logging for debugging
+CONFIG_UR_ENABLE_LOGGING=y
+CONFIG_UR_LOG_LEVEL=3
+
+# Timestamps for signal tracking
+CONFIG_UR_ENABLE_TIMESTAMPS=y
+
+# HSM support
+CONFIG_UR_ENABLE_HSM=y
+
+# Panic handler with black box
+CONFIG_UR_PANIC_ENABLE=y
+CONFIG_UR_PANIC_BLACKBOX_SIZE=16
+
+# Console for debug output
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# FreeRTOS tick rate
+CONFIG_FREERTOS_HZ=1000

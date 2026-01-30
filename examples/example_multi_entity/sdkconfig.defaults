@@ -1,0 +1,26 @@
+# MicroReactor Multi-Entity Example - SDK Configuration Defaults
+
+# Enable MicroReactor features
+CONFIG_UR_ENABLE_LOGGING=y
+CONFIG_UR_LOG_LEVEL=4
+CONFIG_UR_ENABLE_TIMESTAMPS=y
+CONFIG_UR_ENABLE_HSM=y
+
+# Middleware support
+CONFIG_UR_MAX_MIDDLEWARE=8
+
+# Mixin support
+CONFIG_UR_MAX_MIXINS_PER_ENTITY=4
+
+# More entities
+CONFIG_UR_MAX_ENTITIES=8
+
+# Panic handler
+CONFIG_UR_PANIC_ENABLE=y
+CONFIG_UR_PANIC_BLACKBOX_SIZE=32
+
+# Console
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# FreeRTOS
+CONFIG_FREERTOS_HZ=1000

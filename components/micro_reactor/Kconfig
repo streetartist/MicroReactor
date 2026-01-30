@@ -1,0 +1,205 @@
+menu "MicroReactor Configuration"
+
+    config UR_MAX_ENTITIES
+        int "Maximum number of entities"
+        default 16
+        range 1 256
+        help
+            Maximum number of entities that can be registered in the system.
+            Each entity consumes approximately 200 bytes of static memory.
+
+    config UR_MAX_RULES_PER_STATE
+        int "Maximum rules per state"
+        default 16
+        range 4 64
+        help
+            Maximum number of transition rules that can be defined per state.
+
+    config UR_MAX_STATES_PER_ENTITY
+        int "Maximum states per entity"
+        default 16
+        range 2 64
+        help
+            Maximum number of states an entity can have.
+
+    config UR_MAX_MIXINS_PER_ENTITY
+        int "Maximum mixins per entity"
+        default 4
+        range 0 16
+        help
+            Maximum number of mixins that can be attached to an entity.
+            Set to 0 to disable mixin support.
+
+    config UR_INBOX_SIZE
+        int "Entity inbox queue size"
+        default 8
+        range 4 64
+        help
+            Number of signals that can be queued in each entity's inbox.
+
+    config UR_SIGNAL_PAYLOAD_SIZE
+        int "Signal payload size (bytes)"
+        default 4
+        range 4 16
+        help
+            Size of inline payload in signals. Larger payloads use ptr field.
+
+    config UR_MAX_MIDDLEWARE
+        int "Maximum middleware slots"
+        default 8
+        range 0 32
+        help
+            Maximum number of middleware functions in the processing chain.
+            Set to 0 to disable middleware support.
+
+    config UR_SCRATCHPAD_SIZE
+        int "uFlow scratchpad size (bytes)"
+        default 64
+        range 16 256
+        help
+            Size of scratchpad memory for uFlow coroutine local variables.
+
+    config UR_ENABLE_HSM
+        bool "Enable Hierarchical State Machine support"
+        default y
+        help
+            Enable parent state lookups for HSM-style state nesting.
+
+    config UR_ENABLE_LOGGING
+        bool "Enable debug logging"
+        default n
+        help
+            Enable internal debug logging via ESP_LOGx macros.
+
+    config UR_LOG_LEVEL
+        int "Log level (0=none, 5=verbose)"
+        default 3
+        depends on UR_ENABLE_LOGGING
+        range 0 5
+        help
+            Verbosity level for debug logging.
+
+    config UR_ENABLE_TIMESTAMPS
+        bool "Enable signal timestamps"
+        default y
+        help
+            Add timestamps to signals using esp_timer_get_time().
+
+    config UR_ENABLE_EXTRA_WARNINGS
+        bool "Enable extra compiler warnings"
+        default n
+        help
+            Enable -Wall -Wextra -Wpedantic for development.
+
+    menu "Wormhole (Distributed RPC)"
+
+        config UR_WORMHOLE_ENABLE
+            bool "Enable Wormhole subsystem"
+            default n
+            help
+                Enable cross-chip signal routing via UART.
+
+        config UR_WORMHOLE_MAX_ROUTES
+            int "Maximum routing table entries"
+            default 32
+            depends on UR_WORMHOLE_ENABLE
+            range 8 256
+            help
+                Maximum number of remote entity routes.
+
+        config UR_WORMHOLE_UART_NUM
+            int "UART port number"
+            default 1
+            depends on UR_WORMHOLE_ENABLE
+            range 0 2
+            help
+                UART port used for Wormhole communication.
+
+        config UR_WORMHOLE_BAUD_RATE
+            int "UART baud rate"
+            default 115200
+            depends on UR_WORMHOLE_ENABLE
+            help
+                Baud rate for Wormhole UART communication.
+
+        config UR_WORMHOLE_RX_TASK_STACK
+            int "RX task stack size"
+            default 4096
+            depends on UR_WORMHOLE_ENABLE
+            range 2048 8192
+            help
+                Stack size for the Wormhole receive task.
+
+        config UR_WORMHOLE_RX_TASK_PRIORITY
+            int "RX task priority"
+            default 5
+            depends on UR_WORMHOLE_ENABLE
+            range 1 24
+            help
+                Priority for the Wormhole receive task.
+
+    endmenu
+
+    menu "Supervisor (Self-Healing)"
+
+        config UR_SUPERVISOR_ENABLE
+            bool "Enable Supervisor subsystem"
+            default n
+            help
+                Enable entity supervision and self-healing.
+
+        config UR_SUPERVISOR_MAX_CHILDREN
+            int "Maximum children per supervisor"
+            default 8
+            depends on UR_SUPERVISOR_ENABLE
+            range 1 32
+            help
+                Maximum number of entities a supervisor can monitor.
+
+        config UR_SUPERVISOR_RESTART_DELAY_MS
+            int "Restart delay (ms)"
+            default 100
+            depends on UR_SUPERVISOR_ENABLE
+            range 0 10000
+            help
+                Delay before restarting a failed entity.
+
+    endmenu
+
+    menu "Panic Handler"
+
+        config UR_PANIC_ENABLE
+            bool "Enable panic handler"
+            default y
+            help
+                Enable panic hook and black box logging.
+
+        config UR_PANIC_BLACKBOX_SIZE
+            int "Black box signal history"
+            default 16
+            depends on UR_PANIC_ENABLE
+            range 4 64
+            help
+                Number of recent signals to store in black box.
+
+    endmenu
+
+    menu "Data Pipes"
+
+        config UR_PIPE_ENABLE
+            bool "Enable data pipes"
+            default y
+            help
+                Enable StreamBuffer-based data pipes.
+
+        config UR_PIPE_DEFAULT_SIZE
+            int "Default pipe buffer size"
+            default 256
+            depends on UR_PIPE_ENABLE
+            range 64 4096
+            help
+                Default size for pipe buffers when not specified.
+
+    endmenu
+
+endmenu
