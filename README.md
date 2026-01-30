@@ -12,6 +12,8 @@
 
 MicroReactor v3.0 将现代异步编程范式带入嵌入式世界（目前支持esp32，逐步拓展）。在资源受限的环境下，为开发者提供最高级别的抽象与开发体验。
 
+MicroReactor不仅仅是一个框架，也是一套工具，目前拥有：Reactor Studio - 可视化状态机设计器，Reactor Scope - 实时监控示波器，Reactor CTL - 命令行控制工具，Crash Analyzer - 黑盒解码器
+
 ---
 
 ## 📖 简介
@@ -429,3 +431,93 @@ GPL v3 许可证
 
 - [详细教程（中文）](docs/tutorial_zh.md)
 - [API参考（中文）](docs/api_reference_zh.md)
+
+## 🛠️ 开发工具
+
+MicroReactor 提供一套完整的可视化开发工具，位于 `tools/` 目录。
+
+### 安装工具依赖
+
+```bash
+cd tools
+pip install -r requirements.txt
+```
+
+### Reactor Studio - 可视化状态机设计器
+
+```bash
+python tools/studio/reactor_studio.py
+```
+
+拖拽式状态机编辑器，可生成 MicroReactor 框架兼容的 C 代码。
+
+**核心功能：**
+- 🎨 **可视化编辑**：拖拽创建状态，可视化连接转换线
+- 🏗️ **层级状态机**：支持 HSM 父子状态关系
+- 📝 **状态编辑器**：配置进入/退出动作、转换规则表
+- 📦 **多实体项目**：一个项目管理多个实体状态机
+- ⚙️ **代码生成**：自动生成 .h 和 .c 文件
+- 💾 **项目管理**：JSON 格式保存/加载
+- 🌐 **双语界面**：中文/英文切换
+
+**快捷键**：`S` 添加状态 | `T` 转换模式 | `Delete` 删除 | `Ctrl+S` 保存 | `Ctrl+E` 导出
+
+---
+
+### Reactor Scope - 实时监控示波器
+
+```bash
+python tools/scope/reactor_scope.py
+```
+
+连接设备串口，实时监控 MicroReactor 系统运行状态。
+
+**核心功能：**
+- 📊 **Gantt 时序图**：可视化各实体的 dispatch 时间线
+  - 光标定位、悬浮提示、滚动浏览、自动暂停
+  - 支持 10ms ~ 1s 时间窗口切换
+- 🔀 **信号流图**：显示实体间信号传递序列图
+  - 暂停/滚动、信号过滤（隐藏特定信号）
+- 📈 **性能统计**：信号速率、调度耗时、内存监控
+- 🏷️ **元数据显示**：实体名、信号名、状态名（从设备同步）
+- 💉 **信号注入**：手动发送信号测试系统
+- 💻 **命令终端**：发送 Shell 命令
+- 📤 **数据导出**：JSON/CSV 格式
+
+**设备端启用 Trace：**
+```c
+UR_TRACE_INIT();
+ur_trace_set_backend(&ur_trace_backend_uart);
+ur_trace_enable(true);
+
+// 注册元数据（可选，让 Scope 显示可读名称）
+ur_trace_register_entity_name(ENT_ID_SYSTEM, "System");
+ur_trace_register_signal_name(SIG_BUTTON, "BUTTON");
+ur_trace_register_state_name(ENT_ID_SYSTEM, STATE_IDLE, "Idle");
+ur_trace_sync_metadata();
+```
+
+---
+
+### Reactor CTL - 命令行控制工具
+
+```bash
+python tools/rctl.py -p COM3 list          # 列出实体
+python tools/rctl.py -p COM3 inject 1 0x100  # 注入信号
+python tools/rctl.py -p COM3 listen         # 监听信号
+```
+
+---
+
+### Crash Analyzer - 黑盒解码器
+
+```bash
+python tools/crash_analyzer.py dump.bin --elf firmware.elf
+```
+
+分析 MicroReactor 黑盒 dump 数据，生成事件时间线和问题诊断报告。
+
+---
+
+📖 **完整工具文档**：[tools/README.md](tools/README.md)
+
