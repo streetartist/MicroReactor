@@ -30,12 +30,12 @@ from PySide6.QtWidgets import (
     QToolBar, QStatusBar, QLabel, QComboBox, QPushButton,
     QLineEdit, QSpinBox, QGroupBox, QFormLayout,
     QTextEdit, QDockWidget, QMenu, QDialog, QDialogButtonBox,
-    QMessageBox, QProgressBar, QFrame, QScrollArea
+    QMessageBox, QProgressBar, QFrame, QScrollArea, QScrollBar
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QThread, QMutex
+from PySide6.QtCore import Qt, Signal, QTimer, QThread, QMutex, QPoint
 from PySide6.QtGui import (
     QAction, QPainter, QPen, QBrush, QColor, QFont,
-    QKeySequence, QPainterPath
+    QKeySequence, QPainterPath, QPolygon
 )
 
 try:
@@ -199,6 +199,10 @@ class SerialWorker(QThread):
     data_received = Signal(bytes)
     connection_changed = Signal(bool)
     error_occurred = Signal(str)
+    entity_name_received = Signal(int, str)   # entity_id, name
+    signal_name_received = Signal(int, str)   # signal_id, name
+    sysinfo_received = Signal(int, int)       # free_heap, min_heap
+    state_name_received = Signal(int, int, str)  # entity_id, state_id, name
 
     SYNC_BYTE = 0x55
 
@@ -260,10 +264,11 @@ class SerialWorker(QThread):
                         msg = buffer[start+1:end]
                         buffer = buffer[end+1:]
 
-                        # Parse: UR:type,entity_id,data1,data2,timestamp
+                        # Parse messages: UR:, UN:, UG:, UM:, US:
                         try:
                             text = msg.decode('ascii', errors='ignore')
                             if text.startswith('UR:'):
+                                # Trace event: UR:type,entity_id,data1,data2,timestamp
                                 parts = text[3:].split(',')
                                 if len(parts) >= 5:
                                     evt_type = int(parts[0])
@@ -276,6 +281,35 @@ class SerialWorker(QThread):
                                         evt_type, entity_id, 0,
                                         data1, data2, timestamp)
                                     self.data_received.emit(frame)
+                            elif text.startswith('UN:'):
+                                # Entity name: UN:id,name
+                                parts = text[3:].split(',', 1)
+                                if len(parts) >= 2:
+                                    entity_id = int(parts[0])
+                                    name = parts[1].strip()
+                                    self.entity_name_received.emit(entity_id, name)
+                            elif text.startswith('UG:'):
+                                # Signal name: UG:id,name
+                                parts = text[3:].split(',', 1)
+                                if len(parts) >= 2:
+                                    signal_id = int(parts[0])
+                                    name = parts[1].strip()
+                                    self.signal_name_received.emit(signal_id, name)
+                            elif text.startswith('US:'):
+                                # State name: US:entity_id,state_id,name
+                                parts = text[3:].split(',', 2)
+                                if len(parts) >= 3:
+                                    entity_id = int(parts[0])
+                                    state_id = int(parts[1])
+                                    name = parts[2].strip()
+                                    self.state_name_received.emit(entity_id, state_id, name)
+                            elif text.startswith('UM:'):
+                                # System info: UM:free_heap,min_heap
+                                parts = text[3:].split(',')
+                                if len(parts) >= 2:
+                                    free_heap = int(parts[0])
+                                    min_heap = int(parts[1])
+                                    self.sysinfo_received.emit(free_heap, min_heap)
                         except (ValueError, IndexError):
                             pass
 
@@ -308,137 +342,565 @@ class GanttWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(200)
+        self.setMouseTracking(True)
 
-        self.events: Deque[TraceEvent] = deque(maxlen=1000)
+        self.events: List[TraceEvent] = []
         self.entity_colors: Dict[int, QColor] = {}
-        self.time_window_us = 100000  # 100ms window
-        self._dirty = False
+        self.entity_names: Dict[int, str] = {}
+        self.signal_names: Dict[int, str] = {}
+        self.time_window_us = 100000  # 100ms
+        self._paused = False
+        self._scroll_offset = 0
+        self._hover_block = None
+        self._dispatch_blocks: List[tuple] = []
+        self._updating_scrollbar = False  # Flag to prevent recursion
 
-        # Colors for entities
         self.palette = [
-            QColor(70, 130, 180),   # Steel Blue
-            QColor(60, 179, 113),   # Medium Sea Green
-            QColor(255, 165, 0),    # Orange
-            QColor(186, 85, 211),   # Medium Orchid
-            QColor(220, 20, 60),    # Crimson
-            QColor(0, 206, 209),    # Dark Turquoise
+            QColor(70, 130, 180), QColor(60, 179, 113), QColor(255, 165, 0),
+            QColor(186, 85, 211), QColor(220, 20, 60), QColor(0, 206, 209),
         ]
 
-        # Throttled refresh (30 FPS max)
-        self._refresh_timer = QTimer(self)
-        self._refresh_timer.timeout.connect(self._do_refresh)
-        self._refresh_timer.start(33)
+        # Layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
 
-    def _do_refresh(self):
-        if self._dirty:
+        # Toolbar
+        toolbar = QWidget()
+        toolbar.setFixedHeight(28)
+        tb_layout = QHBoxLayout(toolbar)
+        tb_layout.setContentsMargins(5, 2, 5, 2)
+
+        tb_layout.addWidget(QLabel("窗口:"))
+        self.window_combo = QComboBox()
+        self.window_combo.addItems(["10ms", "50ms", "100ms", "200ms", "500ms", "1s"])
+        self.window_combo.setCurrentIndex(2)
+        self.window_combo.currentIndexChanged.connect(self._on_window_change)
+        tb_layout.addWidget(self.window_combo)
+
+        tb_layout.addSpacing(10)
+
+        self.pause_btn = QPushButton("⏸")
+        self.pause_btn.setFixedWidth(30)
+        self.pause_btn.setCheckable(True)
+        self.pause_btn.setToolTip("暂停/继续")
+        self.pause_btn.toggled.connect(self._on_pause)
+        tb_layout.addWidget(self.pause_btn)
+
+        tb_layout.addStretch()
+        self.info_label = QLabel("")
+        tb_layout.addWidget(self.info_label)
+
+        layout.addWidget(toolbar)
+
+        # Canvas
+        self._canvas = _GanttCanvas(self)
+        layout.addWidget(self._canvas, 1)
+
+        # Scrollbar
+        self.scrollbar = QScrollBar(Qt.Horizontal)
+        self.scrollbar.setMinimum(0)
+        self.scrollbar.setMaximum(100)
+        self.scrollbar.setPageStep(100)
+        self.scrollbar.setSingleStep(10)
+        self.scrollbar.valueChanged.connect(self._on_scroll)
+        layout.addWidget(self.scrollbar)
+
+        # Refresh timer
+        self._dirty = False
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._on_timer)
+        self._timer.start(33)
+
+    def _on_window_change(self, idx):
+        vals = [10000, 50000, 100000, 200000, 500000, 1000000]
+        self.time_window_us = vals[idx]
+        self._canvas.update()
+
+    def _on_pause(self, checked):
+        self._paused = checked
+        self.pause_btn.setText("▶" if checked else "⏸")
+        if not checked:
+            self._scroll_offset = 0
+            self._update_scrollbar()
+            self._canvas.update()
+
+    def _on_scroll(self, val):
+        if self._updating_scrollbar:
+            return  # Ignore programmatic updates
+        # Auto-pause when user scrolls
+        if not self._paused:
+            self._paused = True
+            self.pause_btn.setChecked(True)
+            self.pause_btn.setText("▶")
+        max_val = self.scrollbar.maximum()
+        self._scroll_offset = (max_val - val) * 1000
+        self._canvas.update()
+
+    def _on_timer(self):
+        if self._dirty and not self._paused:
             self._dirty = False
-            self.update()
+            self._canvas.update()
+            self._update_scrollbar()
+
+    def _update_scrollbar(self):
+        self._updating_scrollbar = True
+        if self.events and len(self.events) > 1:
+            span_ms = (self.events[-1].timestamp_us - self.events[0].timestamp_us) // 1000
+            window_ms = self.time_window_us // 1000
+            max_val = max(window_ms, span_ms)
+            self.scrollbar.setMaximum(max_val)
+            self.scrollbar.setPageStep(window_ms)
+            if not self._paused:
+                self.scrollbar.setValue(max_val)
+        else:
+            # No data yet
+            window_ms = self.time_window_us // 1000
+            self.scrollbar.setMaximum(window_ms)
+            self.scrollbar.setPageStep(window_ms)
+            self.scrollbar.setValue(window_ms)
+        self._updating_scrollbar = False
+
+    def register_entity_name(self, eid: int, name: str):
+        self.entity_names[eid] = name
+
+    def register_signal_name(self, sig_id: int, name: str):
+        self.signal_names[sig_id] = name
 
     def add_event(self, event: TraceEvent):
+        if self._paused:  # Don't accept new events when paused
+            return
+
+        # Detect timestamp reset (device restarted)
+        if self.events and event.timestamp_us < self.events[-1].timestamp_us - 1000000:
+            # New timestamp is more than 1 second before last - device likely restarted
+            self.events.clear()
+            self.entity_colors.clear()
+            self._dispatch_blocks.clear()
+            self._scroll_offset = 0
+
         self.events.append(event)
-
-        # Assign color if new entity
         if event.entity_id not in self.entity_colors:
-            idx = len(self.entity_colors) % len(self.palette)
-            self.entity_colors[event.entity_id] = self.palette[idx]
-
+            self.entity_colors[event.entity_id] = self.palette[len(self.entity_colors) % len(self.palette)]
         self._dirty = True
 
     def clear(self):
         self.events.clear()
+        self.entity_colors.clear()
+        # Keep entity_names and signal_names (metadata)
+        self._dispatch_blocks.clear()
+        self._scroll_offset = 0
+        self._updating_scrollbar = True
+        window_ms = self.time_window_us // 1000
+        self.scrollbar.setMaximum(window_ms)
+        self.scrollbar.setPageStep(window_ms)
+        self.scrollbar.setValue(window_ms)
+        self._updating_scrollbar = False
+        self._canvas.update()
+
+
+class _GanttCanvas(QWidget):
+    """Internal canvas for GanttWidget"""
+
+    def __init__(self, parent: GanttWidget):
+        super().__init__(parent)
+        self.g = parent
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)  # Enable key events
+        self._cursor_x = None  # Cursor x position (None = no cursor)
+        self._cursor_time = None  # Time at cursor
+        self._dragging = False
+
+    def wheelEvent(self, e):
+        delta = e.angleDelta().y()
+        idx = self.g.window_combo.currentIndex()
+        if delta > 0 and idx > 0:
+            self.g.window_combo.setCurrentIndex(idx - 1)
+        elif delta < 0 and idx < 5:
+            self.g.window_combo.setCurrentIndex(idx + 1)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._dragging = True
+            self._update_cursor(e.position().toPoint())
+        elif e.button() == Qt.RightButton:
+            # Clear cursor
+            self._cursor_x = None
+            self._cursor_time = None
+            self.update()
+
+    def mouseReleaseEvent(self, e):
+        self._dragging = False
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Escape:
+            self._cursor_x = None
+            self._cursor_time = None
+            self.update()
+
+    def mouseMoveEvent(self, e):
+        pos = e.position().toPoint()
+        if self._dragging:
+            self._update_cursor(pos)
+        else:
+            # Hover on blocks
+            self.g._hover_block = None
+            for b in self.g._dispatch_blocks:
+                if b[0] <= pos.x() <= b[2] and b[1] <= pos.y() <= b[3]:
+                    self.g._hover_block = b
+                    break
+            # Clear cursor when not dragging
+            if not self._cursor_x:
+                pass  # Keep cursor if set
         self.update()
 
-    def paintEvent(self, event):
-        if not self.events:
+    def _update_cursor(self, pos):
+        g = self.g
+        if not g.events:
             return
+        left = 70
+        dw = self.width() - left - 5
+        if pos.x() >= left and dw > 0:
+            self._cursor_x = pos.x()
+            max_t = g.events[-1].timestamp_us - g._scroll_offset
+            min_t = max_t - g.time_window_us
+            ratio = (pos.x() - left) / dw
+            self._cursor_time = int(min_t + ratio * g.time_window_us)
+        self.update()
 
+    def paintEvent(self, e):
+        g = self.g
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
 
-        width = self.width()
-        height = self.height()
+        painter.fillRect(0, 0, w, h, QColor(28, 28, 32))
 
-        # Background
-        painter.fillRect(0, 0, width, height, QColor(30, 30, 30))
-
-        # Get time range
-        if not self.events:
+        if not g.events:
+            painter.setPen(QColor(80, 80, 80))
+            painter.drawText(w // 2 - 30, h // 2, "暂无数据")
             return
 
-        max_time = max(e.timestamp_us for e in self.events)
-        min_time = max_time - self.time_window_us
+        max_t = g.events[-1].timestamp_us - g._scroll_offset
+        min_t = max_t - g.time_window_us
 
-        # Draw grid
-        painter.setPen(QPen(QColor(60, 60, 60), 1))
-        for i in range(10):
-            x = int(width * i / 10)
-            painter.drawLine(x, 0, x, height)
-            t_ms = (min_time + self.time_window_us * i / 10) / 1000
-            painter.drawText(x + 2, height - 5, f"{t_ms:.1f}ms")
+        left, bottom = 70, 18
+        dw, dh = w - left - 5, h - bottom
 
-        # Draw entity lanes
-        entities = sorted(self.entity_colors.keys())
-        if not entities:
+        # Grid
+        painter.setPen(QPen(QColor(45, 45, 50), 1))
+        for i in range(11):
+            x = left + dw * i // 10
+            painter.drawLine(x, 0, x, dh)
+
+        # Time labels
+        painter.setPen(QColor(90, 90, 90))
+        for i in range(0, 11, 2):
+            x = left + dw * i // 10
+            t = min_t + g.time_window_us * i // 10
+            lbl = f"{t/1e6:.1f}s" if g.time_window_us >= 1000000 else f"{t/1000:.0f}ms"
+            painter.drawText(x - 12, h - 2, lbl)
+
+        # Lanes
+        ents = sorted(g.entity_colors.keys())
+        if not ents:
             return
 
-        lane_height = max(20, (height - 30) // len(entities))
+        lane_h = min(40, max(24, (dh - 5) // len(ents)))
+        g._dispatch_blocks.clear()
 
-        for lane_idx, entity_id in enumerate(entities):
-            y_base = lane_idx * lane_height + 10
+        for i, eid in enumerate(ents):
+            y = i * lane_h + 3
+            if y + lane_h > dh:
+                break
 
-            # Lane background
-            painter.fillRect(0, y_base, width, lane_height - 2,
-                           QColor(40, 40, 40))
+            painter.fillRect(left, y, dw, lane_h - 2, QColor(38, 38, 42) if i % 2 else QColor(34, 34, 38))
 
-            # Entity label
-            painter.setPen(QPen(QColor(200, 200, 200)))
-            painter.drawText(5, y_base + lane_height // 2 + 5, f"E{entity_id}")
+            name = g.entity_names.get(eid, f"E{eid}")
+            painter.setPen(QColor(160, 160, 160))
+            painter.drawText(3, y + lane_h // 2 + 5, name[:8])
 
-            # Draw dispatch blocks
-            color = self.entity_colors[entity_id]
-            painter.setBrush(QBrush(color))
-            painter.setPen(QPen(color.darker(120), 1))
+            color = g.entity_colors[eid]
+            st, sig = None, 0
 
-            start_time = None
-            for evt in self.events:
-                if evt.entity_id != entity_id:
+            for ev in g.events:
+                if ev.entity_id != eid:
                     continue
+                if ev.event_type == TraceEvent.DISPATCH_START:
+                    st, sig = ev.timestamp_us, ev.signal_id
+                elif ev.event_type == TraceEvent.DISPATCH_END and st is not None:
+                    if ev.timestamp_us >= min_t and st <= max_t:
+                        x1 = left + int((max(st, min_t) - min_t) * dw / g.time_window_us)
+                        x2 = left + int((min(ev.timestamp_us, max_t) - min_t) * dw / g.time_window_us)
+                        bw = max(3, x2 - x1)
+                        by, bh = y + 3, lane_h - 6
 
-                if evt.timestamp_us < min_time:
-                    continue
+                        painter.fillRect(x1, by, bw, bh, color)
+                        painter.setPen(QPen(color.darker(140), 1))
+                        painter.drawRect(x1, by, bw, bh)
 
-                if evt.event_type == TraceEvent.DISPATCH_START:
-                    start_time = evt.timestamp_us
-                elif evt.event_type == TraceEvent.DISPATCH_END and start_time:
-                    # Draw block
-                    x1 = int((start_time - min_time) / self.time_window_us * width)
-                    x2 = int((evt.timestamp_us - min_time) / self.time_window_us * width)
-                    painter.drawRect(x1, y_base + 2, max(2, x2 - x1), lane_height - 6)
-                    start_time = None
+                        dur = ev.timestamp_us - st
+                        g._dispatch_blocks.append((x1, by, x1 + bw, by + bh, eid, dur, sig, st, ev.timestamp_us))
+
+                        if bw > 32:
+                            painter.setPen(Qt.white)
+                            painter.drawText(x1 + 2, by + bh - 2, f"{dur}μs")
+                    st = None
+
+        # Draw cursor line and info panel
+        if self._cursor_x is not None and self._cursor_time is not None:
+            # Draw cursor line
+            painter.setPen(QPen(QColor(255, 100, 100), 2))
+            painter.drawLine(self._cursor_x, 0, self._cursor_x, dh)
+
+            # Find events at cursor time
+            cursor_info = []
+            for block in g._dispatch_blocks:
+                x1, by, x2, y2, eid, dur, sig, t_start, t_end = block
+                if t_start <= self._cursor_time <= t_end:
+                    name = g.entity_names.get(eid, f"E{eid}")
+                    sig_name = g.signal_names.get(sig, f"0x{sig:04X}")
+                    cursor_info.append(f"{name}: {sig_name} ({dur}μs)")
+
+            # Draw info panel
+            if g.time_window_us >= 1000000:
+                time_str = f"{self._cursor_time/1e6:.3f}s"
+            else:
+                time_str = f"{self._cursor_time/1000:.2f}ms"
+
+            panel_lines = [f"时间: {time_str}"] + cursor_info
+            if not cursor_info:
+                panel_lines.append("(无活动)")
+
+            panel_w = max(len(l) for l in panel_lines) * 8 + 12
+            panel_h = len(panel_lines) * 16 + 8
+            px = min(self._cursor_x + 10, w - panel_w - 5)
+            py = 5
+
+            painter.fillRect(px, py, panel_w, panel_h, QColor(40, 40, 50, 240))
+            painter.setPen(QPen(QColor(255, 100, 100), 1))
+            painter.drawRect(px, py, panel_w, panel_h)
+            painter.setPen(QColor(220, 220, 220))
+            for i, line in enumerate(panel_lines):
+                painter.drawText(px + 6, py + 14 + i * 16, line)
+
+        # Tooltip (for hover)
+        elif g._hover_block:
+            x1, y1, x2, y2, eid, dur, sig, _, _ = g._hover_block
+            name = g.entity_names.get(eid, f"E{eid}")
+            sig_name = g.signal_names.get(sig, f"0x{sig:04X}")
+            txt = f"{name} | {sig_name} | {dur}μs"
+            tw = len(txt) * 7 + 8
+            tx, ty = min(x2 + 5, w - tw - 3), max(y1 - 18, 3)
+            painter.fillRect(tx, ty, tw, 16, QColor(55, 55, 65, 230))
+            painter.setPen(QColor(210, 210, 210))
+            painter.drawText(tx + 4, ty + 12, txt)
+
+        # Info
+        g.info_label.setText(f"事件:{len(g.events)} 实体:{len(ents)}")
 
 
 class SignalFlowWidget(QWidget):
-    """Visual signal flow diagram"""
+    """Visual signal flow diagram with pause and scroll"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(300)
 
-        self.signals: Deque[SignalRecord] = deque(maxlen=50)
+        self.signals: List[SignalRecord] = []
         self.entity_positions: Dict[int, int] = {}
+        self.entity_names: Dict[int, str] = {}
+        self.signal_names: Dict[int, str] = {}
+        self.hidden_signals: set = set()  # Signal IDs to hide
         self._dirty = False
+        self._paused = False
+        self._scroll_offset = 0
+        self._visible_count = 20
+        self._updating_scrollbar = False
 
-        # Throttled refresh (20 FPS max)
+        # Layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        # Toolbar
+        toolbar = QWidget()
+        toolbar.setFixedHeight(28)
+        tb_layout = QHBoxLayout(toolbar)
+        tb_layout.setContentsMargins(5, 2, 5, 2)
+
+        tb_layout.addWidget(QLabel("显示:"))
+        self.count_combo = QComboBox()
+        self.count_combo.addItems(["10", "20", "30", "50"])
+        self.count_combo.setCurrentIndex(1)
+        self.count_combo.currentIndexChanged.connect(self._on_count_change)
+        tb_layout.addWidget(self.count_combo)
+
+        tb_layout.addSpacing(10)
+
+        # Filter button
+        self.filter_btn = QPushButton("过滤")
+        self.filter_btn.setFixedWidth(50)
+        self.filter_btn.setToolTip("选择要隐藏的信号")
+        self.filter_btn.clicked.connect(self._show_filter_menu)
+        tb_layout.addWidget(self.filter_btn)
+
+        tb_layout.addSpacing(10)
+
+        self.pause_btn = QPushButton("⏸")
+        self.pause_btn.setFixedWidth(30)
+        self.pause_btn.setCheckable(True)
+        self.pause_btn.setToolTip("暂停/继续")
+        self.pause_btn.toggled.connect(self._on_pause)
+        tb_layout.addWidget(self.pause_btn)
+
+        tb_layout.addStretch()
+        self.info_label = QLabel("")
+        tb_layout.addWidget(self.info_label)
+
+        layout.addWidget(toolbar)
+
+        # Canvas
+        self._canvas = _SignalFlowCanvas(self)
+        layout.addWidget(self._canvas, 1)
+
+        # Scrollbar
+        self.scrollbar = QScrollBar(Qt.Vertical)
+        self.scrollbar.setMinimum(0)
+        self.scrollbar.setMaximum(100)
+        self.scrollbar.setPageStep(20)
+        self.scrollbar.valueChanged.connect(self._on_scroll)
+
+        # Main content with scrollbar
+        content = QWidget()
+        content_layout = QHBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        content_layout.addWidget(self._canvas, 1)
+        content_layout.addWidget(self.scrollbar)
+
+        # Replace canvas with content
+        layout.removeWidget(self._canvas)
+        layout.addWidget(content, 1)
+
+        # Throttled refresh
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._do_refresh)
         self._refresh_timer.start(50)
 
+    def _on_count_change(self, idx):
+        vals = [10, 20, 30, 50]
+        self._visible_count = vals[idx]
+        self._update_scrollbar()
+        self._canvas.update()
+
+    def _on_pause(self, checked):
+        self._paused = checked
+        self.pause_btn.setText("▶" if checked else "⏸")
+        if not checked:
+            self._scroll_offset = 0
+            self._update_scrollbar()
+            self._canvas.update()
+
+    def _on_scroll(self, val):
+        if self._updating_scrollbar:
+            return
+        if not self._paused:
+            self._paused = True
+            self.pause_btn.setChecked(True)
+            self.pause_btn.setText("▶")
+        max_val = self.scrollbar.maximum()
+        self._scroll_offset = max_val - val
+        self._canvas.update()
+
+    def _update_scrollbar(self):
+        self._updating_scrollbar = True
+        filtered = [s for s in self.signals if s.signal_id not in self.hidden_signals]
+        total = len(filtered)
+        max_val = max(0, total - self._visible_count)
+        self.scrollbar.setMaximum(max_val)
+        self.scrollbar.setPageStep(self._visible_count)
+        if not self._paused:
+            self.scrollbar.setValue(max_val)
+        self._updating_scrollbar = False
+
     def _do_refresh(self):
-        if self._dirty:
+        if self._dirty and not self._paused:
             self._dirty = False
-            self.update()
+            self._update_scrollbar()
+            self._canvas.update()
+        filtered_count = len([s for s in self.signals if s.signal_id not in self.hidden_signals])
+        hidden_count = len(self.signals) - filtered_count
+        if hidden_count > 0:
+            self.info_label.setText(f"信号:{filtered_count} (隐藏:{hidden_count})")
+        else:
+            self.info_label.setText(f"信号:{len(self.signals)}")
+
+    def _show_filter_menu(self):
+        """Show filter menu to select signals to hide"""
+        menu = QMenu(self)
+        menu.setStyleSheet("QMenu { background-color: #3a3a40; color: white; }"
+                          "QMenu::item:selected { background-color: #5a5a60; }")
+
+        # Collect all known signal IDs from records
+        known_signals = {}
+        for sig in self.signals:
+            if sig.signal_id not in known_signals:
+                known_signals[sig.signal_id] = sig.signal_name
+
+        # Add signal names from registry
+        for sig_id, name in self.signal_names.items():
+            if sig_id not in known_signals:
+                known_signals[sig_id] = name
+
+        if not known_signals:
+            action = menu.addAction("(暂无信号)")
+            action.setEnabled(False)
+        else:
+            # Sort by signal name
+            for sig_id, sig_name in sorted(known_signals.items(), key=lambda x: x[1]):
+                action = menu.addAction(sig_name)
+                action.setCheckable(True)
+                action.setChecked(sig_id not in self.hidden_signals)
+                action.setData(sig_id)
+                action.triggered.connect(lambda checked, sid=sig_id: self._toggle_signal(sid, checked))
+
+        menu.addSeparator()
+        show_all = menu.addAction("显示全部")
+        show_all.triggered.connect(self._show_all_signals)
+        hide_all = menu.addAction("隐藏全部")
+        hide_all.triggered.connect(lambda: self._hide_all_signals(known_signals.keys()))
+
+        menu.exec(self.filter_btn.mapToGlobal(QPoint(0, self.filter_btn.height())))
+
+    def _toggle_signal(self, signal_id: int, show: bool):
+        """Toggle signal visibility"""
+        if show:
+            self.hidden_signals.discard(signal_id)
+        else:
+            self.hidden_signals.add(signal_id)
+        self._canvas.update()
+
+    def _show_all_signals(self):
+        """Show all signals"""
+        self.hidden_signals.clear()
+        self._canvas.update()
+
+    def _hide_all_signals(self, signal_ids):
+        """Hide all signals"""
+        self.hidden_signals = set(signal_ids)
+        self._canvas.update()
+
+    def register_entity_name(self, eid: int, name: str):
+        self.entity_names[eid] = name
+
+    def register_signal_name(self, sig_id: int, name: str):
+        self.signal_names[sig_id] = name
 
     def add_signal(self, record: SignalRecord):
+        if self._paused:
+            return
+
         self.signals.append(record)
 
         # Track entity positions
@@ -452,9 +914,21 @@ class SignalFlowWidget(QWidget):
     def clear(self):
         self.signals.clear()
         self.entity_positions.clear()
-        self.update()
+        self.hidden_signals.clear()
+        self._scroll_offset = 0
+        self._update_scrollbar()
+        self._canvas.update()
+
+
+class _SignalFlowCanvas(QWidget):
+    """Internal canvas for SignalFlowWidget"""
+
+    def __init__(self, parent: 'SignalFlowWidget'):
+        super().__init__(parent)
+        self.g = parent
 
     def paintEvent(self, event):
+        g = self.g
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
@@ -462,50 +936,69 @@ class SignalFlowWidget(QWidget):
         height = self.height()
 
         # Background
-        painter.fillRect(0, 0, width, height, QColor(250, 250, 250))
+        painter.fillRect(0, 0, width, height, QColor(35, 35, 40))
 
-        if not self.entity_positions:
-            painter.drawText(width // 2 - 50, height // 2, tr("no_signals"))
+        if not g.entity_positions:
+            painter.setPen(QColor(100, 100, 100))
+            painter.drawText(width // 2 - 30, height // 2, "暂无信号")
+            return
+
+        # Calculate visible signals (excluding hidden ones)
+        filtered_signals = [s for s in g.signals if s.signal_id not in g.hidden_signals]
+        total = len(filtered_signals)
+        start_idx = max(0, total - g._visible_count - g._scroll_offset)
+        end_idx = min(total, start_idx + g._visible_count)
+        visible_signals = filtered_signals[start_idx:end_idx]
+
+        if not visible_signals:
+            painter.setPen(QColor(100, 100, 100))
+            painter.drawText(width // 2 - 30, height // 2, "暂无信号")
             return
 
         # Draw entity columns
-        num_entities = len(self.entity_positions)
+        num_entities = len(g.entity_positions)
         col_width = width // (num_entities + 1)
 
-        painter.setPen(QPen(QColor(100, 100, 100), 2))
-        font = QFont("Arial", 9, QFont.Bold)
+        painter.setPen(QPen(QColor(80, 80, 90), 1))
+        font = QFont("Consolas", 9, QFont.Bold)
         painter.setFont(font)
 
-        for entity_id, idx in self.entity_positions.items():
+        for entity_id, idx in g.entity_positions.items():
             x = (idx + 1) * col_width
-            painter.drawLine(x, 50, x, height - 10)
-            painter.drawText(x - 20, 30, f"E{entity_id}")
+            painter.drawLine(x, 40, x, height - 5)
+            name = g.entity_names.get(entity_id, f"E{entity_id}")
+            painter.setPen(QColor(180, 180, 180))
+            painter.drawText(x - len(name) * 3, 25, name)
+            painter.setPen(QPen(QColor(80, 80, 90), 1))
 
         # Draw signal arrows
-        if not self.signals:
-            return
+        row_height = max(18, (height - 50) // len(visible_signals))
 
-        row_height = max(20, (height - 60) // len(self.signals))
+        for i, sig in enumerate(visible_signals):
+            y = 50 + i * row_height
 
-        for i, sig in enumerate(self.signals):
-            y = 60 + i * row_height
-
-            src_x = (self.entity_positions.get(sig.src_id, 0) + 1) * col_width
-            dst_x = (self.entity_positions.get(sig.dst_id, 0) + 1) * col_width
+            src_x = (g.entity_positions.get(sig.src_id, 0) + 1) * col_width
+            dst_x = (g.entity_positions.get(sig.dst_id, 0) + 1) * col_width
 
             # Arrow line
-            painter.setPen(QPen(QColor(70, 130, 180), 2))
+            color = QColor(70, 150, 200)
+            painter.setPen(QPen(color, 2))
             painter.drawLine(src_x, y, dst_x, y)
 
             # Arrow head
             direction = 1 if dst_x > src_x else -1
-            painter.drawLine(dst_x, y, dst_x - direction * 8, y - 5)
-            painter.drawLine(dst_x, y, dst_x - direction * 8, y + 5)
+            if src_x != dst_x:
+                painter.drawLine(dst_x, y, dst_x - direction * 8, y - 4)
+                painter.drawLine(dst_x, y, dst_x - direction * 8, y + 4)
+            else:
+                # Self signal - draw loop
+                painter.drawArc(dst_x - 15, y - 10, 30, 20, 0, 180 * 16)
 
             # Label
             mid_x = (src_x + dst_x) // 2
-            painter.setPen(QPen(QColor(50, 50, 50)))
-            painter.drawText(mid_x - 30, y - 5, sig.signal_name[:15])
+            painter.setPen(QColor(220, 220, 220))
+            label = sig.signal_name[:20]
+            painter.drawText(mid_x - len(label) * 3, y - 4, label)
 
 
 class StatsWidget(QWidget):
@@ -578,9 +1071,14 @@ class ReactorScope(QMainWindow):
 
         # Data
         self.serial_worker = SerialWorker()
-        self.signal_records: Deque[SignalRecord] = deque(maxlen=10000)
-        self.trace_events: Deque[TraceEvent] = deque(maxlen=10000)
+        self.signal_records: List[SignalRecord] = []
+        self.trace_events: List[TraceEvent] = []
         self.entity_status: Dict[int, EntityStatus] = {}
+        self.entity_names: Dict[int, str] = {}   # entity_id -> name
+        self.signal_names: Dict[int, str] = {}   # signal_id -> name
+        self.state_names: Dict[tuple, str] = {}  # (entity_id, state_id) -> name
+        self.free_heap: int = 0
+        self.min_heap: int = 0
 
         # Statistics
         self.total_signals = 0
@@ -597,6 +1095,10 @@ class ReactorScope(QMainWindow):
         self.serial_worker.data_received.connect(self._on_data_received)
         self.serial_worker.connection_changed.connect(self._on_connection_changed)
         self.serial_worker.error_occurred.connect(self._on_error)
+        self.serial_worker.entity_name_received.connect(self._on_entity_name)
+        self.serial_worker.signal_name_received.connect(self._on_signal_name)
+        self.serial_worker.state_name_received.connect(self._on_state_name)
+        self.serial_worker.sysinfo_received.connect(self._on_sysinfo)
 
         # Update timer
         self.update_timer = QTimer()
@@ -795,6 +1297,34 @@ class ReactorScope(QMainWindow):
     def _on_error(self, error: str):
         self.log_text.append(f"{tr('msg_error')} {error}")
 
+    def _on_entity_name(self, entity_id: int, name: str):
+        """Handle entity name from device"""
+        self.entity_names[entity_id] = name
+        self.gantt_widget.register_entity_name(entity_id, name)
+        self.flow_widget.register_entity_name(entity_id, name)
+        # Update entity status if exists
+        if entity_id in self.entity_status:
+            self.entity_status[entity_id].name = name
+        self.log_text.append(f"[META] 实体 {entity_id} = {name}")
+
+    def _on_signal_name(self, signal_id: int, name: str):
+        """Handle signal name from device"""
+        self.signal_names[signal_id] = name
+        self.gantt_widget.register_signal_name(signal_id, name)
+        self.flow_widget.register_signal_name(signal_id, name)
+        self.log_text.append(f"[META] 信号 0x{signal_id:04X} = {name}")
+
+    def _on_sysinfo(self, free_heap: int, min_heap: int):
+        """Handle system info from device"""
+        self.free_heap = free_heap
+        self.min_heap = min_heap
+
+    def _on_state_name(self, entity_id: int, state_id: int, name: str):
+        """Handle state name from device"""
+        self.state_names[(entity_id, state_id)] = name
+        ent_name = self.entity_names.get(entity_id, f"E{entity_id}")
+        self.log_text.append(f"[META] 状态 {ent_name}:{state_id} = {name}")
+
     def _on_data_received(self, data: bytes):
         if self.pause_action.isChecked():
             return
@@ -824,6 +1354,21 @@ class ReactorScope(QMainWindow):
                 self.trace_events.append(event)
                 self.gantt_widget.add_event(event)
 
+                # Track entity status
+                if entity_id not in self.entity_status:
+                    self.entity_status[entity_id] = EntityStatus(
+                        id=entity_id, name=f"E{entity_id}", state=0,
+                        state_name="--", inbox_count=0, signal_count=0,
+                        last_signal="--", last_dispatch_us=0
+                    )
+
+                # Update entity state on state change
+                if event_type == TraceEvent.STATE_CHANGE:
+                    self.entity_status[entity_id].state = to_state
+                    # Use state name if available
+                    state_name = self.state_names.get((entity_id, to_state), f"S{to_state}")
+                    self.entity_status[entity_id].state_name = state_name
+
                 # Track dispatch times
                 if event.event_type == TraceEvent.DISPATCH_END:
                     # Find matching start
@@ -832,21 +1377,30 @@ class ReactorScope(QMainWindow):
                             e.event_type == TraceEvent.DISPATCH_START):
                             duration = event.timestamp_us - e.timestamp_us
                             self.dispatch_times.append(duration)
+                            self.entity_status[entity_id].last_dispatch_us = duration
                             break
 
-                # Log signals
-                if event.event_type in [TraceEvent.SIGNAL_EMIT, TraceEvent.SIGNAL_RECV]:
+                # Track signals
+                if event_type == TraceEvent.DISPATCH_START:
+                    self.entity_status[entity_id].signal_count += 1
+                    sig_name = self.signal_names.get(signal_id, f"0x{signal_id:04X}")
+                    self.entity_status[entity_id].last_signal = sig_name
+
+                    # Add to signal flow (use dispatch as signal flow)
                     self.total_signals += 1
                     self.signal_times.append(time.time())
 
+                    src_name = self.entity_names.get(src_id, f"E{src_id}") if src_id else "?"
+                    dst_name = self.entity_names.get(entity_id, f"E{entity_id}")
+
                     record = SignalRecord(
                         timestamp=time.time(),
-                        src_id=event.src_id,
-                        src_name=f"E{event.src_id}",
-                        dst_id=event.entity_id,
-                        dst_name=f"E{event.entity_id}",
-                        signal_id=event.signal_id,
-                        signal_name=f"0x{event.signal_id:04X}",
+                        src_id=src_id,
+                        src_name=src_name,
+                        dst_id=entity_id,
+                        dst_name=dst_name,
+                        signal_id=signal_id,
+                        signal_name=sig_name,
                         payload=b''
                     )
                     self.signal_records.append(record)
@@ -855,7 +1409,36 @@ class ReactorScope(QMainWindow):
                     # Log
                     self.log_text.append(
                         f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] "
-                        f"E{event.src_id} -> E{event.entity_id}: 0x{event.signal_id:04X}"
+                        f"{src_name} -> {dst_name}: {sig_name}"
+                    )
+
+                # Log signals (legacy SIGNAL_EMIT/RECV - keep for compatibility)
+                elif event.event_type in [TraceEvent.SIGNAL_EMIT, TraceEvent.SIGNAL_RECV]:
+                    self.total_signals += 1
+                    self.signal_times.append(time.time())
+
+                    # Use names if available
+                    src_name = self.entity_names.get(event.src_id, f"E{event.src_id}")
+                    dst_name = self.entity_names.get(event.entity_id, f"E{event.entity_id}")
+                    sig_name = self.signal_names.get(event.signal_id, f"0x{event.signal_id:04X}")
+
+                    record = SignalRecord(
+                        timestamp=time.time(),
+                        src_id=event.src_id,
+                        src_name=src_name,
+                        dst_id=event.entity_id,
+                        dst_name=dst_name,
+                        signal_id=event.signal_id,
+                        signal_name=sig_name,
+                        payload=b''
+                    )
+                    self.signal_records.append(record)
+                    self.flow_widget.add_signal(record)
+
+                    # Log
+                    self.log_text.append(
+                        f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] "
+                        f"{src_name} -> {dst_name}: {sig_name}"
                     )
 
             except Exception as e:
@@ -871,12 +1454,35 @@ class ReactorScope(QMainWindow):
         # Update stats widget (using internal keys)
         self.stats_widget.update_stat("total", str(self.total_signals))
         self.stats_widget.update_stat("rate", str(rate))
+        self.stats_widget.update_stat("active", str(len(self.entity_status)))
+
+        # Update memory stats
+        if self.free_heap > 0:
+            mem_str = f"{self.free_heap // 1024}KB / min {self.min_heap // 1024}KB"
+            self.stats_widget.update_stat("memory", mem_str)
 
         if self.dispatch_times:
             max_dispatch = max(self.dispatch_times)
             avg_dispatch = sum(self.dispatch_times) // len(self.dispatch_times)
             self.stats_widget.update_stat("max", str(max_dispatch))
             self.stats_widget.update_stat("avg", str(avg_dispatch))
+
+        # Update entity tree (use entity names if available)
+        for eid, status in self.entity_status.items():
+            name = self.entity_names.get(eid, f"E{eid}")
+            items = self.entity_tree.findItems(name, Qt.MatchExactly, 0)
+            # Also try old name format
+            if not items:
+                items = self.entity_tree.findItems(f"E{eid}", Qt.MatchExactly, 0)
+            if items:
+                item = items[0]
+                item.setText(0, name)  # Update name in case it changed
+                item.setText(1, status.state_name)
+                item.setText(2, str(status.signal_count))
+            else:
+                item = QTreeWidgetItem([name, status.state_name, str(status.signal_count)])
+                self.entity_tree.addTopLevelItem(item)
+                self.entity_tree.addTopLevelItem(item)
 
         # Update plot
         if HAS_PYQTGRAPH and self.dispatch_times:
@@ -911,6 +1517,13 @@ class ReactorScope(QMainWindow):
         self.dispatch_times.clear()
         self.signal_times.clear()
         self.total_signals = 0
+        self.entity_status.clear()
+        self.entity_names.clear()
+        self.signal_names.clear()
+        self.state_names.clear()
+        self.free_heap = 0
+        self.min_heap = 0
+        self.entity_tree.clear()
         self.gantt_widget.clear()
         self.flow_widget.clear()
         self.log_text.clear()

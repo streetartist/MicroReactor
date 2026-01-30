@@ -396,6 +396,20 @@ void ur_trace_register_state_name(uint16_t entity_id,
                                    uint16_t state_id,
                                    const char *name);
 
+/**
+ * @brief Send all registered metadata to Scope
+ *
+ * Call this after registering all names to sync with Scope.
+ */
+void ur_trace_sync_metadata(void);
+
+/**
+ * @brief Send system info (heap, etc.) to Scope
+ *
+ * Call periodically to update Scope with system status.
+ */
+void ur_trace_send_sysinfo(void);
+
 /* ============================================================================
  * Built-in Backends
  * ========================================================================== */

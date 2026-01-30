@@ -23,7 +23,14 @@ typedef struct {
     const char *name;
 } name_entry_t;
 
+typedef struct {
+    uint16_t entity_id;
+    uint16_t state_id;
+    const char *name;
+} state_name_entry_t;
+
 #define MAX_NAME_ENTRIES 64
+#define MAX_STATE_NAME_ENTRIES 128
 
 static struct {
     ur_trace_event_t events[UR_CFG_TRACE_MAX_ENTRIES];
@@ -37,8 +44,10 @@ static struct {
     /* Name registrations for readable output */
     name_entry_t entity_names[MAX_NAME_ENTRIES];
     name_entry_t signal_names[MAX_NAME_ENTRIES];
+    state_name_entry_t state_names[MAX_STATE_NAME_ENTRIES];
     size_t entity_name_count;
     size_t signal_name_count;
+    size_t state_name_count;
 
     bool enabled;
     bool initialized;
@@ -523,11 +532,94 @@ void ur_trace_register_state_name(uint16_t entity_id,
                                    uint16_t state_id,
                                    const char *name)
 {
-    /* State names could be stored similarly, but for simplicity,
-     * we'll skip this for now as it would require a more complex structure */
-    (void)entity_id;
-    (void)state_id;
-    (void)name;
+    if (name == NULL || g_trace.state_name_count >= MAX_STATE_NAME_ENTRIES) {
+        return;
+    }
+
+    /* Check for existing */
+    for (size_t i = 0; i < g_trace.state_name_count; i++) {
+        if (g_trace.state_names[i].entity_id == entity_id &&
+            g_trace.state_names[i].state_id == state_id) {
+            g_trace.state_names[i].name = name;
+            return;
+        }
+    }
+
+    g_trace.state_names[g_trace.state_name_count].entity_id = entity_id;
+    g_trace.state_names[g_trace.state_name_count].state_id = state_id;
+    g_trace.state_names[g_trace.state_name_count].name = name;
+    g_trace.state_name_count++;
+}
+
+void ur_trace_sync_metadata(void)
+{
+    if (g_trace.backend == NULL || g_trace.backend->write == NULL) {
+        return;
+    }
+
+    char buf[80];
+    int len;
+
+    /* Send entity names: \x02UN:id,name\x03 */
+    for (size_t i = 0; i < g_trace.entity_name_count; i++) {
+        len = snprintf(buf, sizeof(buf), "\x02UN:%u,%s\x03\n",
+                       (unsigned)g_trace.entity_names[i].id,
+                       g_trace.entity_names[i].name);
+        if (len > 0) {
+            g_trace.backend->write(buf, len);
+        }
+    }
+
+    /* Send signal names: \x02UG:id,name\x03 */
+    for (size_t i = 0; i < g_trace.signal_name_count; i++) {
+        len = snprintf(buf, sizeof(buf), "\x02UG:%u,%s\x03\n",
+                       (unsigned)g_trace.signal_names[i].id,
+                       g_trace.signal_names[i].name);
+        if (len > 0) {
+            g_trace.backend->write(buf, len);
+        }
+    }
+
+    /* Send state names: \x02US:entity_id,state_id,name\x03 */
+    for (size_t i = 0; i < g_trace.state_name_count; i++) {
+        len = snprintf(buf, sizeof(buf), "\x02US:%u,%u,%s\x03\n",
+                       (unsigned)g_trace.state_names[i].entity_id,
+                       (unsigned)g_trace.state_names[i].state_id,
+                       g_trace.state_names[i].name);
+        if (len > 0) {
+            g_trace.backend->write(buf, len);
+        }
+    }
+
+    if (g_trace.backend->flush) {
+        g_trace.backend->flush();
+    }
+}
+
+void ur_trace_send_sysinfo(void)
+{
+    if (g_trace.backend == NULL || g_trace.backend->write == NULL) {
+        return;
+    }
+
+    char buf[64];
+    int len;
+
+#if defined(CONFIG_IDF_TARGET) || defined(ESP_PLATFORM)
+    /* Send heap info: \x02UM:free,total\x03 */
+    extern uint32_t esp_get_free_heap_size(void);
+    extern uint32_t esp_get_minimum_free_heap_size(void);
+    uint32_t free_heap = esp_get_free_heap_size();
+    uint32_t min_heap = esp_get_minimum_free_heap_size();
+    len = snprintf(buf, sizeof(buf), "\x02UM:%lu,%lu\x03\n",
+                   (unsigned long)free_heap, (unsigned long)min_heap);
+#else
+    len = snprintf(buf, sizeof(buf), "\x02UM:0,0\x03\n");
+#endif
+
+    if (len > 0) {
+        g_trace.backend->write(buf, len);
+    }
 }
 
 /* ============================================================================
