@@ -12,6 +12,10 @@
 
 #include <string.h>
 
+#if defined(CONFIG_IDF_TARGET) || defined(ESP_PLATFORM)
+#include "esp_timer.h"
+#endif
+
 /* ============================================================================
  * Static Data
  * ========================================================================== */

@@ -380,14 +380,14 @@ typedef struct {
 /**
  * @brief Create a signal with inline u32 payload
  */
-#define UR_SIGNAL_U32(id, src, val) \
-    ((ur_signal_t){ .id = (id), .src_id = (src), .payload.u32[0] = (val) })
+#define UR_SIGNAL_U32(_id, _src, _val) \
+    ((ur_signal_t){ .id = (_id), .src_id = (_src), .payload.u32[0] = (_val) })
 
 /**
  * @brief Create a signal with pointer payload
  */
-#define UR_SIGNAL_PTR(id, src, p) \
-    ((ur_signal_t){ .id = (id), .src_id = (src), .ptr = (p) })
+#define UR_SIGNAL_PTR(_id, _src, _p) \
+    ((ur_signal_t){ .id = (_id), .src_id = (_src), .ptr = (_p) })
 
 /**
  * @brief Define a transition rule

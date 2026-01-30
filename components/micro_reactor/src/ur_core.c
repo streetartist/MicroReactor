@@ -8,6 +8,7 @@
 
 #include "ur_core.h"
 #include "ur_utils.h"
+#include "ur_trace.h"
 #include <string.h>
 
 #if UR_CFG_USE_FREERTOS
@@ -311,6 +312,9 @@ ur_err_t ur_dispatch(ur_entity_t *ent, uint32_t timeout_ms)
     return UR_ERR_DISABLED;
 #endif
 
+    /* Trace: dispatch start */
+    UR_TRACE_START(ent->id, sig.id);
+
     UR_LOG_SIGNAL(ent, &sig);
 
     /* Run middleware chain */
@@ -318,10 +322,12 @@ ur_err_t ur_dispatch(ur_entity_t *ent, uint32_t timeout_ms)
     ur_mw_result_t mw_result = run_middleware_chain(ent, &sig);
     if (mw_result == UR_MW_FILTERED) {
         UR_LOGV("Signal 0x%04X filtered by middleware", sig.id);
+        UR_TRACE_END(ent->id, sig.id);
         return UR_OK;
     }
     if (mw_result == UR_MW_HANDLED) {
         UR_LOGV("Signal 0x%04X handled by middleware", sig.id);
+        UR_TRACE_END(ent->id, sig.id);
         return UR_OK;
     }
 #endif
@@ -343,12 +349,17 @@ ur_err_t ur_dispatch(ur_entity_t *ent, uint32_t timeout_ms)
 
         /* Perform state transition if needed */
         if (next_state != 0 && next_state != ent->current_state) {
+            uint16_t old_state = ent->current_state;
             execute_transition(ent, next_state, &sig);
+            UR_TRACE_TRANSITION(ent->id, old_state, next_state);
         }
     } else {
         UR_LOGV("No rule found for signal 0x%04X in state %d",
                 sig.id, ent->current_state);
     }
+
+    /* Trace: dispatch end */
+    UR_TRACE_END(ent->id, sig.id);
 
     return UR_OK;
 }

@@ -11,7 +11,7 @@
  * Usage:
  * 1. Define parameters with ur_param_def_t array
  * 2. Register parameters with ur_param_init()
- * 3. Read/write with ur_param_get_*/ur_param_set_*
+ * 3. Read/write with ur_param_get_xxx / ur_param_set_xxx
  * 4. Subscribe to SIG_PARAM_CHANGED for notifications
  */
 

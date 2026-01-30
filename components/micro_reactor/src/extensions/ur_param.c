@@ -239,8 +239,8 @@ ur_err_t ur_param_reset_defaults(bool persist)
  * Type-Safe Getters
  * ========================================================================== */
 
-#define PARAM_GET_IMPL(suffix, type, member, param_type) \
-ur_err_t ur_param_get_##suffix(uint16_t id, type *value) \
+#define PARAM_GET_IMPL(suffix, ctype, member, param_type) \
+ur_err_t ur_param_get_##suffix(uint16_t id, ctype *value) \
 { \
     if (value == NULL) return UR_ERR_INVALID_ARG; \
     ur_param_entry_t *entry = find_entry(id); \
@@ -307,8 +307,8 @@ ur_err_t ur_param_get_blob(uint16_t id, void *buffer, size_t *len)
  * Type-Safe Setters
  * ========================================================================== */
 
-#define PARAM_SET_IMPL(suffix, type, member, param_type) \
-ur_err_t ur_param_set_##suffix(uint16_t id, type value) \
+#define PARAM_SET_IMPL(suffix, ctype, member, param_type) \
+ur_err_t ur_param_set_##suffix(uint16_t id, ctype value) \
 { \
     ur_param_entry_t *entry = find_entry(id); \
     if (entry == NULL) return UR_ERR_NOT_FOUND; \

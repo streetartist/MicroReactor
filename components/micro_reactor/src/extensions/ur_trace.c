@@ -8,6 +8,10 @@
 #include <string.h>
 #include <stdio.h>
 
+#if defined(CONFIG_IDF_TARGET) || defined(ESP_PLATFORM)
+#include "esp_timer.h"
+#endif
+
 #if UR_CFG_TRACE_ENABLE
 
 /* ============================================================================
@@ -64,8 +68,9 @@ static void record_event(ur_trace_event_type_t type, uint16_t entity_id,
     }
 
     size_t idx = g_trace.event_head;
+    uint32_t ts = get_time_us();
 
-    g_trace.events[idx].timestamp_us = get_time_us();
+    g_trace.events[idx].timestamp_us = ts;
     g_trace.events[idx].entity_id = entity_id;
     g_trace.events[idx].event_type = type;
     g_trace.events[idx].flags = 0;
@@ -94,6 +99,19 @@ static void record_event(ur_trace_event_type_t type, uint16_t entity_id,
 
         default:
             break;
+    }
+
+    /* Real-time streaming: output frame immediately if backend is set */
+    if (g_trace.backend != NULL && g_trace.backend->write != NULL) {
+        /* Use text format for compatibility with console output */
+        char buf[64];
+        int len = snprintf(buf, sizeof(buf), "\x02UR:%u,%u,%lu,%lu,%lu\x03\n",
+                           (unsigned)type, (unsigned)entity_id,
+                           (unsigned long)data1, (unsigned long)data2,
+                           (unsigned long)ts);
+        if (len > 0) {
+            g_trace.stats.bytes_written += g_trace.backend->write(buf, len);
+        }
     }
 
     g_trace.event_head = (g_trace.event_head + 1) % UR_CFG_TRACE_MAX_ENTRIES;
@@ -529,18 +547,18 @@ const ur_trace_backend_t ur_trace_backend_buffer = {
     .deinit = buffer_deinit,
 };
 
-/* UART backend */
+/* UART backend - use stdout which is already configured */
 #if UR_CFG_USE_FREERTOS
-#include "driver/uart.h"
 
 static size_t uart_write(const void *data, size_t len)
 {
-    return uart_write_bytes(UART_NUM_0, (const char *)data, len);
+    /* Use fwrite to stdout - works with ESP-IDF console */
+    return fwrite(data, 1, len, stdout);
 }
 
 static void uart_flush_fn(void)
 {
-    uart_wait_tx_done(UART_NUM_0, pdMS_TO_TICKS(100));
+    fflush(stdout);
 }
 
 const ur_trace_backend_t ur_trace_backend_uart = {

@@ -10,7 +10,7 @@ Features:
 - Drag & drop states and transitions
 - Code generation (C header and source)
 - Project save/load (JSON format)
-- Signal and rule editing
+- Bilingual UI (Chinese/English, default: Chinese)
 """
 
 import sys
@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QFormLayout, QLineEdit, QSpinBox,
     QComboBox, QTextEdit, QListWidget, QListWidgetItem, QPushButton,
     QFileDialog, QMessageBox, QSplitter, QLabel, QGroupBox,
-    QTableWidget, QTableWidgetItem, QHeaderView, QMenu,
+    QTableWidget, QTableWidgetItem, QHeaderView, QMenu, QInputDialog,
     QStatusBar, QToolButton
 )
 from PySide6.QtCore import Qt, QPointF, QRectF, QLineF, Signal, QTimer
@@ -36,6 +36,114 @@ from PySide6.QtGui import (
     QAction, QPainter, QPen, QBrush, QColor, QFont,
     QPainterPath, QPolygonF, QKeySequence, QIcon, QTransform
 )
+
+
+# =============================================================================
+# Internationalization (i18n)
+# =============================================================================
+
+_lang = "zh"  # Default: Chinese
+
+_TR = {
+    # Window
+    "title": {"zh": "MicroReactor Studio - 状态机设计器", "en": "MicroReactor Studio"},
+    "ready": {"zh": "就绪", "en": "Ready"},
+
+    # Menu - File
+    "file": {"zh": "文件", "en": "File"},
+    "new_project": {"zh": "新建项目", "en": "New Project"},
+    "open_project": {"zh": "打开项目...", "en": "Open Project..."},
+    "save_project": {"zh": "保存项目", "en": "Save Project"},
+    "save_as": {"zh": "另存为...", "en": "Save As..."},
+    "export_code": {"zh": "导出 C 代码...", "en": "Export C Code..."},
+    "exit": {"zh": "退出", "en": "Exit"},
+
+    # Menu - Edit
+    "edit": {"zh": "编辑", "en": "Edit"},
+    "add_state": {"zh": "添加状态", "en": "Add State"},
+    "add_transition": {"zh": "添加转换", "en": "Add Transition"},
+    "delete": {"zh": "删除", "en": "Delete"},
+
+    # Menu - Entity
+    "entity": {"zh": "实体", "en": "Entity"},
+    "new_entity": {"zh": "新建实体", "en": "New Entity"},
+
+    # Menu - Language
+    "language": {"zh": "语言 Language", "en": "语言 Language"},
+    "lang_zh": {"zh": "中文", "en": "中文 Chinese"},
+    "lang_en": {"zh": "English", "en": "English"},
+
+    # Left panel
+    "entities": {"zh": "实体列表:", "en": "Entities:"},
+    "btn_new_entity": {"zh": "+ 新建实体", "en": "+ New Entity"},
+
+    # Right panel
+    "properties": {"zh": "属性:", "en": "Properties:"},
+    "code_preview": {"zh": "代码预览:", "en": "Code Preview:"},
+
+    # Transition mode
+    "trans_hint": {"zh": "点击源状态，然后点击目标状态（ESC 取消）", "en": "Click source, then target (ESC to cancel)"},
+    "trans_source": {"zh": "源: {name} → 点击目标状态（ESC 取消）", "en": "Source: {name} → Click target (ESC to cancel)"},
+    "trans_done": {"zh": "转换已创建！继续添加或按 ESC 退出", "en": "Transition created! Continue or ESC to exit"},
+    "trans_cleared": {"zh": "已清除，点击源状态或按 ESC 退出", "en": "Cleared. Click source or ESC to exit"},
+
+    # Context menu - State
+    "ctx_add_trans": {"zh": "从此状态添加转换", "en": "Add Transition From Here"},
+    "ctx_edit_state": {"zh": "编辑状态...", "en": "Edit State..."},
+    "ctx_set_initial": {"zh": "设为初始状态", "en": "Set as Initial State"},
+    "ctx_delete_state": {"zh": "删除状态", "en": "Delete State"},
+
+    # Context menu - Transition
+    "ctx_edit_signal": {"zh": "编辑信号名...", "en": "Edit Signal Name..."},
+    "ctx_delete_trans": {"zh": "删除转换", "en": "Delete Transition"},
+
+    # State editor dialog
+    "dlg_edit_state": {"zh": "编辑状态: {name}", "en": "Edit State: {name}"},
+    "dlg_name": {"zh": "名称:", "en": "Name:"},
+    "dlg_id": {"zh": "ID:", "en": "ID:"},
+    "dlg_parent": {"zh": "父状态:", "en": "Parent State:"},
+    "dlg_on_entry": {"zh": "进入动作:", "en": "On Entry:"},
+    "dlg_on_exit": {"zh": "退出动作:", "en": "On Exit:"},
+    "dlg_rules": {"zh": "转换规则:", "en": "Transition Rules:"},
+    "dlg_add_rule": {"zh": "添加规则", "en": "Add Rule"},
+    "dlg_signal": {"zh": "信号", "en": "Signal"},
+    "dlg_next_state": {"zh": "下一状态", "en": "Next State"},
+    "dlg_action": {"zh": "动作", "en": "Action"},
+    "dlg_none": {"zh": "(无)", "en": "(None)"},
+    "dlg_stay": {"zh": "(保持)", "en": "(Stay)"},
+
+    # New entity dialog
+    "dlg_new_entity": {"zh": "新建实体", "en": "New Entity"},
+    "dlg_entity_name": {"zh": "实体名称:", "en": "Entity Name:"},
+    "dlg_entity_id": {"zh": "实体 ID:", "en": "Entity ID:"},
+
+    # Signal edit dialog
+    "dlg_edit_signal": {"zh": "编辑信号", "en": "Edit Signal"},
+    "dlg_signal_name": {"zh": "信号名:", "en": "Signal Name:"},
+
+    # Messages
+    "msg_no_entity": {"zh": "未选择实体", "en": "No entity selected"},
+    "msg_saved": {"zh": "已保存到 {path}", "en": "Saved to {path}"},
+    "msg_opened": {"zh": "已打开 {path}", "en": "Opened {path}"},
+    "msg_export_done": {"zh": "导出完成", "en": "Export Complete"},
+    "msg_export_files": {"zh": "已生成:\n{h}\n{c}", "en": "Generated:\n{h}\n{c}"},
+    "msg_open_failed": {"zh": "打开失败: {e}", "en": "Failed to open: {e}"},
+    "msg_save_failed": {"zh": "保存失败: {e}", "en": "Failed to save: {e}"},
+    "msg_export_failed": {"zh": "导出失败: {e}", "en": "Failed to export: {e}"},
+    "warning": {"zh": "警告", "en": "Warning"},
+    "error": {"zh": "错误", "en": "Error"},
+}
+
+def tr(key: str, **kw) -> str:
+    """Get translated string."""
+    s = _TR.get(key, {}).get(_lang, key)
+    return s.format(**kw) if kw else s
+
+def set_lang(lang: str):
+    """Set language: 'zh' or 'en'."""
+    global _lang
+    if lang in ("zh", "en"):
+        _lang = lang
 
 
 # =============================================================================
@@ -118,6 +226,9 @@ class StateItem(QGraphicsEllipseItem):
         )
         self.setAcceptHoverEvents(True)
 
+        # Enable context menu
+        self.setAcceptedMouseButtons(Qt.LeftButton | Qt.RightButton)
+
         # Connected transitions
         self.transitions_out: List['TransitionItem'] = []
         self.transitions_in: List['TransitionItem'] = []
@@ -161,6 +272,53 @@ class StateItem(QGraphicsEllipseItem):
             self.scene().edit_state(self)
         super().mouseDoubleClickEvent(event)
 
+    def contextMenuEvent(self, event):
+        """Right-click context menu for quick actions"""
+        menu = QMenu()
+
+        # Transition action
+        add_trans_action = menu.addAction(tr("studio.ctx_add_trans"))
+        add_trans_action.triggered.connect(lambda: self._start_transition_from_here())
+
+        menu.addSeparator()
+
+        # Edit action
+        edit_action = menu.addAction(tr("studio.ctx_edit_state"))
+        edit_action.triggered.connect(lambda: self.scene().edit_state(self) if self.scene() else None)
+
+        # Set as initial
+        set_initial_action = menu.addAction(tr("studio.ctx_set_initial"))
+        set_initial_action.triggered.connect(lambda: self._set_as_initial())
+
+        menu.addSeparator()
+
+        # Delete action
+        delete_action = menu.addAction(tr("studio.ctx_delete_state"))
+        delete_action.triggered.connect(lambda: self._delete_self())
+
+        menu.exec(event.screenPos())
+
+    def _start_transition_from_here(self):
+        """Start transition creation from this state"""
+        if self.scene():
+            self.scene().set_transition_mode(True)
+            self.scene()._set_transition_source(self)
+
+    def _set_as_initial(self):
+        """Set this state as the initial state"""
+        if self.scene() and self.scene().entity:
+            # Reset all states' visual
+            for item in self.scene().state_items.values():
+                item.set_initial(False)
+            # Set this as initial
+            self.scene().entity.initial_state = self.state.id
+            self.set_initial(True)
+
+    def _delete_self(self):
+        """Delete this state"""
+        if self.scene():
+            self.scene()._delete_state(self)
+
 
 class TransitionItem(QGraphicsPathItem):
     """Visual representation of a transition (arrow)"""
@@ -177,6 +335,9 @@ class TransitionItem(QGraphicsPathItem):
         # Arrow head
         self.arrow_size = 10
 
+        # Base curve offset
+        self.base_offset = 20
+
         # Label
         self.label = QGraphicsTextItem(rule.signal_name, self)
         self.label.setDefaultTextColor(QColor(100, 100, 100))
@@ -192,37 +353,127 @@ class TransitionItem(QGraphicsPathItem):
         # Make selectable
         self.setFlags(QGraphicsItem.ItemIsSelectable)
 
+    def _get_all_transitions_between_states(self):
+        """Get all transitions between these two states (both directions)"""
+        state_a = self.from_state
+        state_b = self.to_state
+
+        transitions = []
+
+        # A → B transitions
+        for trans in state_a.transitions_out:
+            if trans.to_state == state_b:
+                transitions.append(('ab', trans))
+
+        # B → A transitions
+        for trans in state_b.transitions_out:
+            if trans.to_state == state_a:
+                transitions.append(('ba', trans))
+
+        return transitions
+
+    def _get_perpendicular_offset(self, p1: QPointF, p2: QPointF, offset: float) -> QPointF:
+        """Get perpendicular offset vector"""
+        dx = p2.x() - p1.x()
+        dy = p2.y() - p1.y()
+        length = math.sqrt(dx * dx + dy * dy)
+        if length < 1:
+            return QPointF(0, 0)
+        # Perpendicular unit vector (rotate 90 degrees)
+        return QPointF(-dy / length * offset, dx / length * offset)
+
     def update_position(self):
         """Update arrow path based on state positions"""
         p1 = self.from_state.scenePos()
         p2 = self.to_state.scenePos()
 
         # Calculate direction
-        line = QLineF(p1, p2)
-        length = line.length()
+        dx = p2.x() - p1.x()
+        dy = p2.y() - p1.y()
+        length = math.sqrt(dx * dx + dy * dy)
 
         if length < 1:
             return
 
+        # Unit vector
+        ux, uy = dx / length, dy / length
+
         # Shorten line to end at state edges
-        unit = (p2 - p1) / length
-        start = p1 + unit * 50  # State radius
-        end = p2 - unit * 50
+        start = QPointF(p1.x() + ux * 50, p1.y() + uy * 30)
+        end = QPointF(p2.x() - ux * 50, p2.y() - uy * 30)
 
-        # Create path
+        # Get all transitions between these two states
+        all_transitions = self._get_all_transitions_between_states()
+        total_count = len(all_transitions)
+
         path = QPainterPath()
-        path.moveTo(start)
-        path.lineTo(end)
 
-        # Arrow head
-        angle = math.atan2(-(p2.y() - p1.y()), p2.x() - p1.x())
-        arrow_p1 = end + QPointF(
-            math.sin(angle - math.pi / 3) * self.arrow_size,
-            math.cos(angle - math.pi / 3) * self.arrow_size
+        if total_count <= 1:
+            # Single transition - straight line
+            path.moveTo(start)
+            path.lineTo(end)
+            arrow_angle = math.atan2(-dy, dx)
+            label_pos = QPointF((start.x() + end.x()) / 2, (start.y() + end.y()) / 2)
+        else:
+            # Multiple transitions - find our index and calculate offset
+            my_direction = 'ab'  # This transition goes from_state -> to_state
+
+            # Separate by direction
+            ab_transitions = [t for d, t in all_transitions if d == 'ab']
+            ba_transitions = [t for d, t in all_transitions if d == 'ba']
+
+            # Find my index within my direction group
+            try:
+                my_index = ab_transitions.index(self)
+            except ValueError:
+                my_index = 0
+
+            ab_count = len(ab_transitions)
+            ba_count = len(ba_transitions)
+
+            # Calculate offset for this transition
+            # AB transitions curve one way, BA transitions curve the other
+            # Within each group, spread them out
+
+            if ab_count > 0 and ba_count > 0:
+                # Bidirectional - AB goes positive, BA goes negative
+                # Spread within each group
+                if ab_count == 1:
+                    offset = self.base_offset
+                else:
+                    # Multiple in same direction: spread from base_offset outward
+                    offset = self.base_offset + my_index * 15
+            else:
+                # All same direction - spread around center
+                # Center the group: offsets like -20, 0, 20 for 3 items
+                center_offset = (ab_count - 1) / 2
+                offset = (my_index - center_offset) * 20
+
+            # Get perpendicular offset for the control point
+            perp = self._get_perpendicular_offset(p1, p2, offset)
+
+            # Control point at midpoint + perpendicular offset
+            mid = QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
+            ctrl = QPointF(mid.x() + perp.x(), mid.y() + perp.y())
+
+            # Draw quadratic bezier curve
+            path.moveTo(start)
+            path.quadTo(ctrl, end)
+
+            # Arrow head angle - tangent at end of curve
+            arrow_angle = math.atan2(-(end.y() - ctrl.y()), end.x() - ctrl.x())
+
+            # Label position - at the control point
+            label_pos = ctrl
+
+        # Draw arrow head
+        arrow_p1 = QPointF(
+            end.x() + math.sin(arrow_angle - math.pi / 3) * self.arrow_size,
+            end.y() + math.cos(arrow_angle - math.pi / 3) * self.arrow_size
         )
-        arrow_p2 = end + QPointF(
-            math.sin(angle - math.pi + math.pi / 3) * self.arrow_size,
-            math.cos(angle - math.pi + math.pi / 3) * self.arrow_size
+        arrow_p2 = QPointF(
+            end.x() + math.sin(arrow_angle - math.pi + math.pi / 3) * self.arrow_size,
+            end.y() + math.cos(arrow_angle - math.pi + math.pi / 3) * self.arrow_size
         )
 
         path.moveTo(end)
@@ -232,13 +483,48 @@ class TransitionItem(QGraphicsPathItem):
 
         self.setPath(path)
 
-        # Position label at midpoint
-        mid = (start + end) / 2
-        self.label.setPos(mid.x(), mid.y() - 15)
+        # Position label
+        label_rect = self.label.boundingRect()
+        self.label.setPos(
+            label_pos.x() - label_rect.width() / 2,
+            label_pos.y() - label_rect.height() - 2
+        )
 
     def set_signal_name(self, name: str):
         self.rule.signal_name = name
         self.label.setPlainText(name)
+
+    def contextMenuEvent(self, event):
+        """Right-click context menu for transition"""
+        menu = QMenu()
+
+        # Edit signal name
+        edit_action = menu.addAction(tr("studio.ctx_edit_signal"))
+        edit_action.triggered.connect(lambda: self._edit_signal_name())
+
+        menu.addSeparator()
+
+        # Delete transition
+        delete_action = menu.addAction(tr("studio.ctx_delete_trans"))
+        delete_action.triggered.connect(lambda: self._delete_self())
+
+        menu.exec(event.screenPos())
+
+    def _edit_signal_name(self):
+        """Quick edit signal name"""
+        name, ok = QInputDialog.getText(
+            None, tr("studio.dlg_edit_signal"),
+            tr("studio.dlg_signal_name"),
+            QLineEdit.Normal,
+            self.rule.signal_name
+        )
+        if ok and name:
+            self.set_signal_name(name)
+
+    def _delete_self(self):
+        """Delete this transition"""
+        if self.scene():
+            self.scene()._delete_transition(self)
 
 
 # =============================================================================
@@ -250,6 +536,7 @@ class StateMachineScene(QGraphicsScene):
 
     state_selected = Signal(StateDef)
     transition_selected = Signal(RuleDef)
+    status_message = Signal(str)  # For status bar updates
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -258,10 +545,9 @@ class StateMachineScene(QGraphicsScene):
         self.state_items: Dict[int, StateItem] = {}
         self.transition_items: List[TransitionItem] = []
 
-        # Drawing mode
-        self.drawing_transition = False
-        self.transition_start: Optional[StateItem] = None
-        self.temp_line: Optional[QGraphicsLineItem] = None
+        # Transition mode (two-click method)
+        self.transition_mode = False
+        self.transition_source: Optional[StateItem] = None
 
     def load_entity(self, entity: EntityDef):
         """Load entity into scene"""
@@ -332,11 +618,15 @@ class StateMachineScene(QGraphicsScene):
         self.removeItem(item)
 
     def _delete_transition(self, item: TransitionItem):
+        # Store references before removal
+        from_state = item.from_state
+        to_state = item.to_state
+
         # Remove from states
-        if item in item.from_state.transitions_out:
-            item.from_state.transitions_out.remove(item)
-        if item in item.to_state.transitions_in:
-            item.to_state.transitions_in.remove(item)
+        if item in from_state.transitions_out:
+            from_state.transitions_out.remove(item)
+        if item in to_state.transitions_in:
+            to_state.transitions_in.remove(item)
 
         # Remove rule from state
         for state in self.entity.states:
@@ -346,64 +636,109 @@ class StateMachineScene(QGraphicsScene):
             self.transition_items.remove(item)
         self.removeItem(item)
 
-    def start_transition_draw(self, from_state: StateItem):
-        """Start drawing a transition"""
-        self.drawing_transition = True
-        self.transition_start = from_state
-        self.temp_line = QGraphicsLineItem()
-        self.temp_line.setPen(QPen(QColor(150, 150, 150), 2, Qt.DashLine))
-        self.addItem(self.temp_line)
+        # Update all remaining transitions between these states
+        self._refresh_transitions_between(from_state, to_state)
 
-    def finish_transition_draw(self, to_state: StateItem):
-        """Finish drawing a transition"""
-        if self.temp_line:
-            self.removeItem(self.temp_line)
-            self.temp_line = None
+    def set_transition_mode(self, enabled: bool):
+        """Enable/disable transition creation mode"""
+        self.transition_mode = enabled
+        if not enabled:
+            self._clear_transition_source()
+        else:
+            self.status_message.emit(tr("trans_hint"))
 
-        if self.transition_start and to_state and self.transition_start != to_state:
-            # Create new rule
-            rule = RuleDef(
-                signal_id=0,
-                signal_name="SIG_???",
-                next_state=to_state.state.id,
-                next_state_name=to_state.state.name
-            )
-            self.transition_start.state.rules.append(rule)
+    def _clear_transition_source(self):
+        """Clear the transition source selection"""
+        if self.transition_source:
+            # Reset visual highlight
+            self.transition_source.setPen(QPen(QColor(70, 130, 180), 2))
+            self.transition_source = None
 
-            # Create visual
-            trans = TransitionItem(rule, self.transition_start, to_state)
-            self.addItem(trans)
-            self.transition_items.append(trans)
+    def _set_transition_source(self, state_item: StateItem):
+        """Set the source state for transition"""
+        self._clear_transition_source()
+        self.transition_source = state_item
+        # Highlight source state
+        state_item.setPen(QPen(QColor(255, 165, 0), 3))  # Orange highlight
+        self.status_message.emit(tr("trans_source", name=state_item.state.name))
 
-        self.drawing_transition = False
-        self.transition_start = None
+    def _complete_transition(self, target_item: StateItem):
+        """Complete the transition to target state"""
+        if not self.transition_source or self.transition_source == target_item:
+            return False
 
-    def cancel_transition_draw(self):
-        """Cancel transition drawing"""
-        if self.temp_line:
-            self.removeItem(self.temp_line)
-            self.temp_line = None
-        self.drawing_transition = False
-        self.transition_start = None
+        # Create new rule
+        rule = RuleDef(
+            signal_id=0,
+            signal_name="SIG_???",
+            next_state=target_item.state.id,
+            next_state_name=target_item.state.name
+        )
+        self.transition_source.state.rules.append(rule)
 
-    def mouseMoveEvent(self, event):
-        if self.drawing_transition and self.temp_line and self.transition_start:
-            start = self.transition_start.scenePos()
-            end = event.scenePos()
-            self.temp_line.setLine(QLineF(start, end))
-        super().mouseMoveEvent(event)
+        # Create visual transition
+        trans = TransitionItem(rule, self.transition_source, target_item)
+        self.addItem(trans)
+        self.transition_items.append(trans)
 
-    def mouseReleaseEvent(self, event):
-        if self.drawing_transition:
-            # Check if released on a state
+        # Update ALL transitions between these two states (both directions)
+        self._refresh_transitions_between(self.transition_source, target_item)
+
+        # Reset for next transition
+        self._clear_transition_source()
+        self.status_message.emit(tr("trans_done"))
+        return True
+
+    def _refresh_transitions_between(self, state_a: StateItem, state_b: StateItem):
+        """Refresh all transitions between two states"""
+        # A → B
+        for trans in state_a.transitions_out:
+            if trans.to_state == state_b:
+                trans.update_position()
+        # B → A
+        for trans in state_b.transitions_out:
+            if trans.to_state == state_a:
+                trans.update_position()
+
+    def cancel_transition_mode(self):
+        """Cancel transition mode entirely"""
+        self._clear_transition_source()
+        self.transition_mode = False
+        self.status_message.emit(tr("ready"))
+
+    def mousePressEvent(self, event):
+        if self.transition_mode and event.button() == Qt.LeftButton:
+            # Find clicked item
             item = self.itemAt(event.scenePos(), QTransform())
+            state_item = None
+
             if isinstance(item, StateItem):
-                self.finish_transition_draw(item)
+                state_item = item
             elif isinstance(item, QGraphicsTextItem) and isinstance(item.parentItem(), StateItem):
-                self.finish_transition_draw(item.parentItem())
+                state_item = item.parentItem()
+
+            if state_item:
+                if self.transition_source is None:
+                    # First click - select source
+                    self._set_transition_source(state_item)
+                else:
+                    # Second click - complete transition
+                    self._complete_transition(state_item)
+                return  # Don't propagate event
+
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape and self.transition_mode:
+            if self.transition_source:
+                # Just clear source, stay in transition mode
+                self._clear_transition_source()
+                self.status_message.emit(tr("trans_cleared"))
             else:
-                self.cancel_transition_draw()
-        super().mouseReleaseEvent(event)
+                # Exit transition mode
+                self.cancel_transition_mode()
+            return
+        super().keyPressEvent(event)
 
     def edit_state(self, item: StateItem):
         """Called when state is double-clicked"""
@@ -421,7 +756,7 @@ class StateEditorDialog(QDialog):
         super().__init__(parent)
         self.state = state
         self.entity = entity
-        self.setWindowTitle(f"Edit State: {state.name}")
+        self.setWindowTitle(tr("dlg_edit_state", name=state.name))
         self.setMinimumWidth(500)
 
         layout = QVBoxLayout(self)
@@ -430,45 +765,45 @@ class StateEditorDialog(QDialog):
         form = QFormLayout()
 
         self.name_edit = QLineEdit(state.name)
-        form.addRow("Name:", self.name_edit)
+        form.addRow(tr("dlg_name"), self.name_edit)
 
         self.id_spin = QSpinBox()
         self.id_spin.setRange(1, 255)
         self.id_spin.setValue(state.id)
-        form.addRow("ID:", self.id_spin)
+        form.addRow(tr("dlg_id"), self.id_spin)
 
         self.parent_combo = QComboBox()
-        self.parent_combo.addItem("(None)", 0)
+        self.parent_combo.addItem(tr("dlg_none"), 0)
         for s in entity.states:
             if s.id != state.id:
                 self.parent_combo.addItem(s.name, s.id)
         idx = self.parent_combo.findData(state.parent_id)
         if idx >= 0:
             self.parent_combo.setCurrentIndex(idx)
-        form.addRow("Parent State:", self.parent_combo)
+        form.addRow(tr("dlg_parent"), self.parent_combo)
 
         self.entry_edit = QLineEdit(state.on_entry)
-        self.entry_edit.setPlaceholderText("Function name (e.g., on_idle_entry)")
-        form.addRow("On Entry:", self.entry_edit)
+        self.entry_edit.setPlaceholderText("e.g., on_idle_entry")
+        form.addRow(tr("dlg_on_entry"), self.entry_edit)
 
         self.exit_edit = QLineEdit(state.on_exit)
-        self.exit_edit.setPlaceholderText("Function name (e.g., on_idle_exit)")
-        form.addRow("On Exit:", self.exit_edit)
+        self.exit_edit.setPlaceholderText("e.g., on_idle_exit")
+        form.addRow(tr("dlg_on_exit"), self.exit_edit)
 
         layout.addLayout(form)
 
         # Rules table
-        layout.addWidget(QLabel("Transition Rules:"))
+        layout.addWidget(QLabel(tr("dlg_rules")))
 
         self.rules_table = QTableWidget()
         self.rules_table.setColumnCount(4)
-        self.rules_table.setHorizontalHeaderLabels(["Signal", "Next State", "Action", ""])
+        self.rules_table.setHorizontalHeaderLabels([tr("dlg_signal"), tr("dlg_next_state"), tr("dlg_action"), ""])
         self.rules_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self._populate_rules()
         layout.addWidget(self.rules_table)
 
         # Add rule button
-        add_rule_btn = QPushButton("Add Rule")
+        add_rule_btn = QPushButton(tr("dlg_add_rule"))
         add_rule_btn.clicked.connect(self._add_rule)
         layout.addWidget(add_rule_btn)
 
@@ -484,7 +819,7 @@ class StateEditorDialog(QDialog):
             self.rules_table.setItem(i, 0, QTableWidgetItem(rule.signal_name))
 
             state_combo = QComboBox()
-            state_combo.addItem("(Stay)", 0)
+            state_combo.addItem(tr("dlg_stay"), 0)
             for s in self.entity.states:
                 state_combo.addItem(s.name, s.id)
             idx = state_combo.findData(rule.next_state)
@@ -538,17 +873,17 @@ class NewEntityDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("New Entity")
+        self.setWindowTitle(tr("dlg_new_entity"))
 
         layout = QFormLayout(self)
 
         self.name_edit = QLineEdit("MyEntity")
-        layout.addRow("Entity Name:", self.name_edit)
+        layout.addRow(tr("dlg_entity_name"), self.name_edit)
 
         self.id_spin = QSpinBox()
         self.id_spin.setRange(1, 255)
         self.id_spin.setValue(1)
-        layout.addRow("Entity ID:", self.id_spin)
+        layout.addRow(tr("dlg_entity_id"), self.id_spin)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -713,7 +1048,7 @@ class ReactorStudio(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MicroReactor Studio")
+        self.setWindowTitle(tr("title"))
         self.setMinimumSize(1200, 800)
 
         self.project = Project()
@@ -728,49 +1063,55 @@ class ReactorStudio(QMainWindow):
 
     def _create_actions(self):
         # File actions
-        self.new_action = QAction("New Project", self)
+        self.new_action = QAction(tr("new_project"), self)
         self.new_action.setShortcut(QKeySequence.New)
         self.new_action.triggered.connect(self.new_project)
 
-        self.open_action = QAction("Open Project...", self)
+        self.open_action = QAction(tr("open_project"), self)
         self.open_action.setShortcut(QKeySequence.Open)
         self.open_action.triggered.connect(self.open_project)
 
-        self.save_action = QAction("Save Project", self)
+        self.save_action = QAction(tr("save_project"), self)
         self.save_action.setShortcut(QKeySequence.Save)
         self.save_action.triggered.connect(self.save_project)
 
-        self.save_as_action = QAction("Save Project As...", self)
+        self.save_as_action = QAction(tr("save_as"), self)
         self.save_as_action.setShortcut(QKeySequence.SaveAs)
         self.save_as_action.triggered.connect(self.save_project_as)
 
-        self.export_action = QAction("Export C Code...", self)
+        self.export_action = QAction(tr("export_code"), self)
         self.export_action.setShortcut("Ctrl+E")
         self.export_action.triggered.connect(self.export_code)
 
         # Edit actions
-        self.add_state_action = QAction("Add State", self)
+        self.add_state_action = QAction(tr("add_state"), self)
         self.add_state_action.setShortcut("S")
         self.add_state_action.triggered.connect(self.add_state)
 
-        self.add_transition_action = QAction("Add Transition", self)
+        self.add_transition_action = QAction(tr("add_transition"), self)
         self.add_transition_action.setShortcut("T")
         self.add_transition_action.setCheckable(True)
         self.add_transition_action.triggered.connect(self.toggle_transition_mode)
 
-        self.delete_action = QAction("Delete", self)
+        self.delete_action = QAction(tr("delete"), self)
         self.delete_action.setShortcut(QKeySequence.Delete)
         self.delete_action.triggered.connect(self.delete_selected)
 
         # Entity actions
-        self.new_entity_action = QAction("New Entity", self)
+        self.new_entity_action = QAction(tr("new_entity"), self)
         self.new_entity_action.triggered.connect(self.new_entity)
+
+        # Language actions
+        self.lang_zh_action = QAction(tr("lang_zh"), self)
+        self.lang_zh_action.triggered.connect(lambda: self._set_language("zh"))
+        self.lang_en_action = QAction(tr("lang_en"), self)
+        self.lang_en_action.triggered.connect(lambda: self._set_language("en"))
 
     def _create_menus(self):
         menubar = self.menuBar()
 
         # File menu
-        file_menu = menubar.addMenu("File")
+        file_menu = menubar.addMenu(tr("file"))
         file_menu.addAction(self.new_action)
         file_menu.addAction(self.open_action)
         file_menu.addAction(self.save_action)
@@ -778,18 +1119,23 @@ class ReactorStudio(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(self.export_action)
         file_menu.addSeparator()
-        file_menu.addAction("Exit", self.close)
+        file_menu.addAction(tr("exit"), self.close)
 
         # Edit menu
-        edit_menu = menubar.addMenu("Edit")
+        edit_menu = menubar.addMenu(tr("edit"))
         edit_menu.addAction(self.add_state_action)
         edit_menu.addAction(self.add_transition_action)
         edit_menu.addSeparator()
         edit_menu.addAction(self.delete_action)
 
         # Entity menu
-        entity_menu = menubar.addMenu("Entity")
+        entity_menu = menubar.addMenu(tr("entity"))
         entity_menu.addAction(self.new_entity_action)
+
+        # Language menu
+        lang_menu = menubar.addMenu(tr("language"))
+        lang_menu.addAction(self.lang_zh_action)
+        lang_menu.addAction(self.lang_en_action)
 
     def _create_toolbar(self):
         toolbar = QToolBar()
@@ -814,21 +1160,23 @@ class ReactorStudio(QMainWindow):
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(5, 5, 5, 5)
 
-        left_layout.addWidget(QLabel("Entities:"))
+        self.entities_label = QLabel(tr("entities"))
+        left_layout.addWidget(self.entities_label)
         self.entity_tree = QTreeWidget()
         self.entity_tree.setHeaderHidden(True)
         self.entity_tree.itemClicked.connect(self._on_entity_selected)
         left_layout.addWidget(self.entity_tree)
 
-        new_entity_btn = QPushButton("+ New Entity")
-        new_entity_btn.clicked.connect(self.new_entity)
-        left_layout.addWidget(new_entity_btn)
+        self.new_entity_btn = QPushButton(tr("btn_new_entity"))
+        self.new_entity_btn.clicked.connect(self.new_entity)
+        left_layout.addWidget(self.new_entity_btn)
 
         splitter.addWidget(left_panel)
 
         # Center - Graphics view
         self.scene = StateMachineScene()
         self.scene.state_selected.connect(self._on_state_selected)
+        self.scene.status_message.connect(self._on_status_message)
 
         self.view = QGraphicsView(self.scene)
         self.view.setRenderHint(QPainter.Antialiasing)
@@ -841,13 +1189,15 @@ class ReactorStudio(QMainWindow):
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(5, 5, 5, 5)
 
-        right_layout.addWidget(QLabel("Properties:"))
+        self.properties_label = QLabel(tr("properties"))
+        right_layout.addWidget(self.properties_label)
         self.properties_text = QTextEdit()
         self.properties_text.setReadOnly(True)
         right_layout.addWidget(self.properties_text)
 
         # Code preview
-        right_layout.addWidget(QLabel("Code Preview:"))
+        self.code_preview_label = QLabel(tr("code_preview"))
+        right_layout.addWidget(self.code_preview_label)
         self.code_preview = QTextEdit()
         self.code_preview.setReadOnly(True)
         self.code_preview.setFontFamily("Consolas")
@@ -859,7 +1209,13 @@ class ReactorStudio(QMainWindow):
         splitter.setSizes([200, 700, 300])
 
     def _create_statusbar(self):
-        self.statusBar().showMessage("Ready")
+        self.statusBar().showMessage(tr("ready"))
+
+    def _set_language(self, lang: str):
+        """Switch UI language and refresh"""
+        set_lang(lang)
+        QMessageBox.information(self, "Language",
+            "语言已切换，重启后生效。\nLanguage changed. Restart to apply.")
 
     def _update_entity_tree(self):
         self.entity_tree.clear()
@@ -899,6 +1255,13 @@ class ReactorStudio(QMainWindow):
                 self._update_entity_tree()
                 self._update_code_preview()
 
+    def _on_status_message(self, message: str):
+        """Handle status messages from the scene"""
+        self.statusBar().showMessage(message)
+        # Also update the toggle button state if transition mode was cancelled
+        if message == tr("ready") and self.add_transition_action.isChecked():
+            self.add_transition_action.setChecked(False)
+
     def _update_code_preview(self):
         if self.current_entity:
             code = CodeGenerator.generate_source(self.current_entity)
@@ -912,11 +1275,11 @@ class ReactorStudio(QMainWindow):
         self.scene.clear()
         self._update_entity_tree()
         self.code_preview.clear()
-        self.setWindowTitle("MicroReactor Studio - New Project")
+        self.setWindowTitle(tr("title") + " - " + tr("new_project"))
 
     def open_project(self):
         filename, _ = QFileDialog.getOpenFileName(
-            self, "Open Project", "", "MicroReactor Project (*.mrp);;All Files (*)"
+            self, tr("open_project"), "", "MicroReactor Project (*.mrp);;All Files (*)"
         )
         if filename:
             try:
@@ -962,11 +1325,11 @@ class ReactorStudio(QMainWindow):
 
                 self.current_file = filename
                 self._update_entity_tree()
-                self.setWindowTitle(f"MicroReactor Studio - {Path(filename).name}")
-                self.statusBar().showMessage(f"Opened {filename}")
+                self.setWindowTitle(f"{tr('title')} - {Path(filename).name}")
+                self.statusBar().showMessage(tr("msg_opened", path=filename))
 
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to open project: {e}")
+                QMessageBox.critical(self, tr("error"), tr("msg_open_failed", e=e))
 
     def save_project(self):
         if self.current_file:
@@ -976,14 +1339,14 @@ class ReactorStudio(QMainWindow):
 
     def save_project_as(self):
         filename, _ = QFileDialog.getSaveFileName(
-            self, "Save Project", "", "MicroReactor Project (*.mrp);;All Files (*)"
+            self, tr("save_as"), "", "MicroReactor Project (*.mrp);;All Files (*)"
         )
         if filename:
             if not filename.endswith('.mrp'):
                 filename += '.mrp'
             self._save_to_file(filename)
             self.current_file = filename
-            self.setWindowTitle(f"MicroReactor Studio - {Path(filename).name}")
+            self.setWindowTitle(f"{tr('title')} - {Path(filename).name}")
 
     def _save_to_file(self, filename: str):
         try:
@@ -1030,17 +1393,17 @@ class ReactorStudio(QMainWindow):
             with open(filename, 'w') as f:
                 json.dump(data, f, indent=2)
 
-            self.statusBar().showMessage(f"Saved to {filename}")
+            self.statusBar().showMessage(tr("msg_saved", path=filename))
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save project: {e}")
+            QMessageBox.critical(self, tr("error"), tr("msg_save_failed", e=e))
 
     def export_code(self):
         if not self.current_entity:
-            QMessageBox.warning(self, "Warning", "No entity selected")
+            QMessageBox.warning(self, tr("warning"), tr("msg_no_entity"))
             return
 
-        directory = QFileDialog.getExistingDirectory(self, "Export Directory")
+        directory = QFileDialog.getExistingDirectory(self, tr("export_code"))
         if directory:
             try:
                 # Generate header
@@ -1056,12 +1419,12 @@ class ReactorStudio(QMainWindow):
                     f.write(source)
 
                 QMessageBox.information(
-                    self, "Export Complete",
-                    f"Generated:\n{header_path}\n{source_path}"
+                    self, tr("msg_export_done"),
+                    tr("msg_export_files", h=header_path, c=source_path)
                 )
 
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to export: {e}")
+                QMessageBox.critical(self, tr("error"), tr("msg_export_failed", e=e))
 
     def new_entity(self):
         dialog = NewEntityDialog(self)
@@ -1081,22 +1444,18 @@ class ReactorStudio(QMainWindow):
             self._update_code_preview()
 
     def toggle_transition_mode(self, checked: bool):
+        """Toggle transition creation mode (two-click method)"""
+        self.scene.set_transition_mode(checked)
         if checked:
+            # Disable rubber band selection in transition mode
             self.view.setDragMode(QGraphicsView.NoDrag)
-            self.statusBar().showMessage("Click and drag from source state to target state")
-            # Connect mouse press
-            self.scene.mousePressEvent = self._transition_mouse_press
         else:
             self.view.setDragMode(QGraphicsView.RubberBandDrag)
-            self.statusBar().showMessage("Ready")
+            self.statusBar().showMessage(tr("ready"))
 
     def _transition_mouse_press(self, event):
-        item = self.scene.itemAt(event.scenePos(), QTransform())
-        if isinstance(item, StateItem):
-            self.scene.start_transition_draw(item)
-        elif isinstance(item, QGraphicsTextItem) and isinstance(item.parentItem(), StateItem):
-            self.scene.start_transition_draw(item.parentItem())
-        QGraphicsScene.mousePressEvent(self.scene, event)
+        # This method is no longer used - transition handling is now in the scene
+        pass
 
     def delete_selected(self):
         self.scene.delete_selected()

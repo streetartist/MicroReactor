@@ -24,7 +24,8 @@ idf_component_register(
     PRIV_REQUIRES
         esp_ringbuf
         nvs_flash
-        esp_sleep
+        esp_hw_support
+        esp_pm
 )
 
 # Optional: Enable extra warnings for development
