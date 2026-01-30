@@ -202,4 +202,171 @@ menu "MicroReactor Configuration"
 
     endmenu
 
+    menu "Pub/Sub Bus"
+
+        config UR_BUS_ENABLE
+            bool "Enable Pub/Sub Bus"
+            default y
+            help
+                Enable topic-based publish/subscribe signal routing.
+                Provides O(subscribers) delivery instead of O(all_entities).
+
+        config UR_BUS_MAX_TOPICS
+            int "Maximum topics"
+            default 64
+            depends on UR_BUS_ENABLE
+            range 8 256
+            help
+                Maximum number of unique signal IDs that can have subscribers.
+
+        config UR_BUS_MAX_SUBSCRIBERS
+            int "Maximum subscribers per topic"
+            default 8
+            depends on UR_BUS_ENABLE
+            range 2 32
+            help
+                Maximum entities that can subscribe to a single topic.
+
+    endmenu
+
+    menu "Parameter System (KV Store)"
+
+        config UR_PARAM_ENABLE
+            bool "Enable Parameter System"
+            default y
+            help
+                Enable persistent key-value parameter storage with
+                auto-notification on changes.
+
+        config UR_PARAM_MAX_COUNT
+            int "Maximum parameters"
+            default 32
+            depends on UR_PARAM_ENABLE
+            range 8 128
+            help
+                Maximum number of parameters that can be registered.
+
+        config UR_PARAM_MAX_STRING_LEN
+            int "Maximum string/blob length"
+            default 64
+            depends on UR_PARAM_ENABLE
+            range 16 256
+            help
+                Maximum length for string and blob type parameters.
+
+        config UR_PARAM_NAMESPACE
+            string "NVS namespace"
+            default "ur_param"
+            depends on UR_PARAM_ENABLE
+            help
+                Namespace used for NVS storage.
+
+    endmenu
+
+    menu "Signal Codec (RPC)"
+
+        config UR_CODEC_ENABLE
+            bool "Enable Signal Codec"
+            default y
+            help
+                Enable signal serialization/deserialization for
+                external communication (MQTT, HTTP, UART).
+
+        config UR_CODEC_MAX_SCHEMAS
+            int "Maximum signal schemas"
+            default 32
+            depends on UR_CODEC_ENABLE
+            range 8 128
+            help
+                Maximum number of signal schemas for structured encoding.
+
+        config UR_CODEC_BUFFER_SIZE
+            int "Codec buffer size"
+            default 256
+            depends on UR_CODEC_ENABLE
+            range 64 1024
+            help
+                Buffer size for streaming decoder.
+
+        config UR_CODEC_JSON_ENABLE
+            bool "Enable JSON codec"
+            default y
+            depends on UR_CODEC_ENABLE
+            help
+                Enable JSON format encoding/decoding (larger code size).
+
+    endmenu
+
+    menu "Power Management"
+
+        config UR_POWER_ENABLE
+            bool "Enable Power Management"
+            default y
+            help
+                Enable vote-based automatic power management with
+                tickless idle support.
+
+        config UR_POWER_MAX_MODES
+            int "Maximum power modes"
+            default 4
+            depends on UR_POWER_ENABLE
+            range 2 8
+            help
+                Number of power modes (active, idle, light sleep, deep sleep).
+
+        config UR_POWER_IDLE_THRESHOLD_MS
+            int "Idle threshold (ms)"
+            default 100
+            depends on UR_POWER_ENABLE
+            range 10 1000
+            help
+                Minimum idle time before entering sleep modes.
+
+    endmenu
+
+    menu "Performance Tracing"
+
+        config UR_TRACE_ENABLE
+            bool "Enable Performance Tracing"
+            default n
+            help
+                Enable execution tracing for timing analysis.
+                Adds overhead when enabled.
+
+        config UR_TRACE_BUFFER_SIZE
+            int "Trace buffer size"
+            default 4096
+            depends on UR_TRACE_ENABLE
+            range 1024 16384
+            help
+                Size of trace output buffer.
+
+        config UR_TRACE_MAX_ENTRIES
+            int "Maximum trace entries"
+            default 256
+            depends on UR_TRACE_ENABLE
+            range 64 1024
+            help
+                Number of trace events to store in ring buffer.
+
+    endmenu
+
+    menu "Access Control (Firewall)"
+
+        config UR_ACL_ENABLE
+            bool "Enable Access Control"
+            default y
+            help
+                Enable source-based signal filtering for security.
+
+        config UR_ACL_MAX_RULES
+            int "Maximum ACL rules per entity"
+            default 32
+            depends on UR_ACL_ENABLE
+            range 8 128
+            help
+                Maximum number of ACL rules per protected entity.
+
+    endmenu
+
 endmenu

@@ -240,6 +240,174 @@ extern "C" {
 #endif
 
 /* ============================================================================
+ * Pub/Sub Bus Configuration
+ * ========================================================================== */
+
+#ifndef UR_CFG_BUS_ENABLE
+#ifdef CONFIG_UR_BUS_ENABLE
+#define UR_CFG_BUS_ENABLE           CONFIG_UR_BUS_ENABLE
+#else
+#define UR_CFG_BUS_ENABLE           1
+#endif
+#endif
+
+#ifndef UR_CFG_BUS_MAX_TOPICS
+#ifdef CONFIG_UR_BUS_MAX_TOPICS
+#define UR_CFG_BUS_MAX_TOPICS       CONFIG_UR_BUS_MAX_TOPICS
+#else
+#define UR_CFG_BUS_MAX_TOPICS       64
+#endif
+#endif
+
+#ifndef UR_CFG_BUS_MAX_SUBSCRIBERS
+#ifdef CONFIG_UR_BUS_MAX_SUBSCRIBERS
+#define UR_CFG_BUS_MAX_SUBSCRIBERS  CONFIG_UR_BUS_MAX_SUBSCRIBERS
+#else
+#define UR_CFG_BUS_MAX_SUBSCRIBERS  8
+#endif
+#endif
+
+/* ============================================================================
+ * Parameter System Configuration
+ * ========================================================================== */
+
+#ifndef UR_CFG_PARAM_ENABLE
+#ifdef CONFIG_UR_PARAM_ENABLE
+#define UR_CFG_PARAM_ENABLE         CONFIG_UR_PARAM_ENABLE
+#else
+#define UR_CFG_PARAM_ENABLE         1
+#endif
+#endif
+
+#ifndef UR_CFG_PARAM_MAX_COUNT
+#ifdef CONFIG_UR_PARAM_MAX_COUNT
+#define UR_CFG_PARAM_MAX_COUNT      CONFIG_UR_PARAM_MAX_COUNT
+#else
+#define UR_CFG_PARAM_MAX_COUNT      32
+#endif
+#endif
+
+#ifndef UR_CFG_PARAM_MAX_STRING_LEN
+#ifdef CONFIG_UR_PARAM_MAX_STRING_LEN
+#define UR_CFG_PARAM_MAX_STRING_LEN CONFIG_UR_PARAM_MAX_STRING_LEN
+#else
+#define UR_CFG_PARAM_MAX_STRING_LEN 64
+#endif
+#endif
+
+/* ============================================================================
+ * Signal Codec Configuration
+ * ========================================================================== */
+
+#ifndef UR_CFG_CODEC_ENABLE
+#ifdef CONFIG_UR_CODEC_ENABLE
+#define UR_CFG_CODEC_ENABLE         CONFIG_UR_CODEC_ENABLE
+#else
+#define UR_CFG_CODEC_ENABLE         1
+#endif
+#endif
+
+#ifndef UR_CFG_CODEC_MAX_SCHEMAS
+#ifdef CONFIG_UR_CODEC_MAX_SCHEMAS
+#define UR_CFG_CODEC_MAX_SCHEMAS    CONFIG_UR_CODEC_MAX_SCHEMAS
+#else
+#define UR_CFG_CODEC_MAX_SCHEMAS    32
+#endif
+#endif
+
+#ifndef UR_CFG_CODEC_BUFFER_SIZE
+#ifdef CONFIG_UR_CODEC_BUFFER_SIZE
+#define UR_CFG_CODEC_BUFFER_SIZE    CONFIG_UR_CODEC_BUFFER_SIZE
+#else
+#define UR_CFG_CODEC_BUFFER_SIZE    256
+#endif
+#endif
+
+#ifndef UR_CFG_CODEC_JSON_ENABLE
+#ifdef CONFIG_UR_CODEC_JSON_ENABLE
+#define UR_CFG_CODEC_JSON_ENABLE    CONFIG_UR_CODEC_JSON_ENABLE
+#else
+#define UR_CFG_CODEC_JSON_ENABLE    1
+#endif
+#endif
+
+/* ============================================================================
+ * Power Management Configuration
+ * ========================================================================== */
+
+#ifndef UR_CFG_POWER_ENABLE
+#ifdef CONFIG_UR_POWER_ENABLE
+#define UR_CFG_POWER_ENABLE         CONFIG_UR_POWER_ENABLE
+#else
+#define UR_CFG_POWER_ENABLE         1
+#endif
+#endif
+
+#ifndef UR_CFG_POWER_MAX_MODES
+#ifdef CONFIG_UR_POWER_MAX_MODES
+#define UR_CFG_POWER_MAX_MODES      CONFIG_UR_POWER_MAX_MODES
+#else
+#define UR_CFG_POWER_MAX_MODES      4
+#endif
+#endif
+
+#ifndef UR_CFG_POWER_IDLE_THRESHOLD_MS
+#ifdef CONFIG_UR_POWER_IDLE_THRESHOLD_MS
+#define UR_CFG_POWER_IDLE_THRESHOLD_MS CONFIG_UR_POWER_IDLE_THRESHOLD_MS
+#else
+#define UR_CFG_POWER_IDLE_THRESHOLD_MS 100
+#endif
+#endif
+
+/* ============================================================================
+ * Performance Tracing Configuration
+ * ========================================================================== */
+
+#ifndef UR_CFG_TRACE_ENABLE
+#ifdef CONFIG_UR_TRACE_ENABLE
+#define UR_CFG_TRACE_ENABLE         CONFIG_UR_TRACE_ENABLE
+#else
+#define UR_CFG_TRACE_ENABLE         0
+#endif
+#endif
+
+#ifndef UR_CFG_TRACE_BUFFER_SIZE
+#ifdef CONFIG_UR_TRACE_BUFFER_SIZE
+#define UR_CFG_TRACE_BUFFER_SIZE    CONFIG_UR_TRACE_BUFFER_SIZE
+#else
+#define UR_CFG_TRACE_BUFFER_SIZE    4096
+#endif
+#endif
+
+#ifndef UR_CFG_TRACE_MAX_ENTRIES
+#ifdef CONFIG_UR_TRACE_MAX_ENTRIES
+#define UR_CFG_TRACE_MAX_ENTRIES    CONFIG_UR_TRACE_MAX_ENTRIES
+#else
+#define UR_CFG_TRACE_MAX_ENTRIES    256
+#endif
+#endif
+
+/* ============================================================================
+ * Access Control Configuration
+ * ========================================================================== */
+
+#ifndef UR_CFG_ACL_ENABLE
+#ifdef CONFIG_UR_ACL_ENABLE
+#define UR_CFG_ACL_ENABLE           CONFIG_UR_ACL_ENABLE
+#else
+#define UR_CFG_ACL_ENABLE           1
+#endif
+#endif
+
+#ifndef UR_CFG_ACL_MAX_RULES
+#ifdef CONFIG_UR_ACL_MAX_RULES
+#define UR_CFG_ACL_MAX_RULES        CONFIG_UR_ACL_MAX_RULES
+#else
+#define UR_CFG_ACL_MAX_RULES        32
+#endif
+#endif
+
+/* ============================================================================
  * FreeRTOS Integration
  * ========================================================================== */
 
