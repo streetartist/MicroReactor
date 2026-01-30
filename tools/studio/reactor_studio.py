@@ -267,10 +267,11 @@ class StateItem(QGraphicsEllipseItem):
         super().hoverLeaveEvent(event)
 
     def mouseDoubleClickEvent(self, event):
+        # Call super first, before any operation that might delete this item
+        super().mouseDoubleClickEvent(event)
         # Open state editor
         if self.scene() and hasattr(self.scene(), 'edit_state'):
             self.scene().edit_state(self)
-        super().mouseDoubleClickEvent(event)
 
     def contextMenuEvent(self, event):
         """Right-click context menu for quick actions"""
