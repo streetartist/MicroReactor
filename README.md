@@ -5,7 +5,7 @@
 [![Standard](https://img.shields.io/badge/standard-C99-orange.svg)]()
 
 <p align="center">
-  <img src="docs/logo.png">
+  <img src="docs/logo.png" width=256 height=256>
 </p>
 
 > **为微控制器而生的响应式架构。稳如磐石，灵动如流。**
