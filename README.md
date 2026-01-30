@@ -4,6 +4,10 @@
 [![Platform](https://img.shields.io/badge/platform-ESP32%20%7C%20STM32-green.svg)]()
 [![Standard](https://img.shields.io/badge/standard-C99-orange.svg)]()
 
+<p align="center">
+  <img src="docs/logo.png">
+</p>
+
 > **为微控制器而生的响应式架构。稳如磐石，灵动如流。**
 
 MicroReactor v3.0 将现代异步编程范式带入嵌入式世界。在资源受限的环境下，为开发者提供最高级别的抽象与开发体验。
