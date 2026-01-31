@@ -22,6 +22,7 @@
 #include "esp_timer.h"
 
 #include "ur_core.h"
+#include "ur_flow.h"
 #include "ur_bus.h"
 #include "ur_param.h"
 #include "ur_codec.h"
@@ -147,7 +148,12 @@ static ur_entity_t g_rpc_ent;
  * Battery Entity
  * ========================================================================== */
 
-static uint8_t g_battery_level = 100;
+/* Scratchpad for battery entity state */
+typedef struct {
+    uint8_t level;
+} battery_scratch_t;
+
+UR_SCRATCH_STATIC_ASSERT(battery_scratch_t);
 
 /* Timer callback for battery simulation (tickless - replaces battery_sim_task) */
 static void battery_timer_callback(void *arg)
@@ -162,21 +168,27 @@ static void battery_timer_callback(void *arg)
 static uint16_t battery_tick(ur_entity_t *ent, const ur_signal_t *sig)
 {
     (void)sig;
+    battery_scratch_t *s = UR_SCRATCH_PTR(ent, battery_scratch_t);
+
+    /* Initialize on first call (scratchpad is zeroed on init) */
+    if (s->level == 0) {
+        s->level = 100;
+    }
 
     /* Simulate battery drain */
-    if (g_battery_level > 0) {
-        g_battery_level--;
+    if (s->level > 0) {
+        s->level--;
     }
 
     /* Publish battery level (only subscribers receive it) */
-    ur_publish_u32(SIG_BATTERY_LEVEL, ent->id, g_battery_level);
+    ur_publish_u32(SIG_BATTERY_LEVEL, ent->id, s->level);
 
-    if (g_battery_level == 20) {
-        ur_publish_u32(SIG_BATTERY_LOW, ent->id, g_battery_level);
+    if (s->level == 20) {
+        ur_publish_u32(SIG_BATTERY_LOW, ent->id, s->level);
     }
 
-    if (g_battery_level == 5) {
-        ur_publish_u32(SIG_BATTERY_CRITICAL, ent->id, g_battery_level);
+    if (s->level == 5) {
+        ur_publish_u32(SIG_BATTERY_CRITICAL, ent->id, s->level);
     }
 
     return 0;

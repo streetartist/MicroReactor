@@ -151,6 +151,8 @@ typedef struct {
     int32_t humidity;       /* Humidity in 0.1% */
 } sensor_scratch_t;
 
+UR_SCRATCH_STATIC_ASSERT(sensor_scratch_t);
+
 static uint16_t sensor_poll_action(ur_entity_t *ent, const ur_signal_t *sig)
 {
     (void)sig;
@@ -203,6 +205,8 @@ typedef struct {
     int32_t last_temp;
     uint32_t alarm_count;
 } controller_scratch_t;
+
+UR_SCRATCH_STATIC_ASSERT(controller_scratch_t);
 
 #define TEMP_THRESHOLD_HIGH     300     /* 30.0 C */
 #define TEMP_THRESHOLD_CRITICAL 350     /* 35.0 C */
@@ -306,6 +310,8 @@ typedef struct {
     int32_t displayed_temp;
     bool alarm_active;
 } display_scratch_t;
+
+UR_SCRATCH_STATIC_ASSERT(display_scratch_t);
 
 static uint16_t disp_show_temp(ur_entity_t *ent, const ur_signal_t *sig)
 {
