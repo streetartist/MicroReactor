@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_timer.h"
 
 #include "ur_core.h"
 #include "ur_bus.h"
@@ -148,6 +149,16 @@ static ur_entity_t g_rpc_ent;
 
 static uint8_t g_battery_level = 100;
 
+/* Timer callback for battery simulation (tickless - replaces battery_sim_task) */
+static void battery_timer_callback(void *arg)
+{
+    ur_entity_t *ent = (ur_entity_t *)arg;
+
+    /* Send timeout signal to trigger battery tick */
+    ur_signal_t tick = { .id = SIG_SYS_TIMEOUT, .src_id = 0 };
+    ur_emit(ent, tick);
+}
+
 static uint16_t battery_tick(ur_entity_t *ent, const ur_signal_t *sig)
 {
     (void)sig;
@@ -172,7 +183,7 @@ static uint16_t battery_tick(ur_entity_t *ent, const ur_signal_t *sig)
 }
 
 static const ur_rule_t battery_rules[] = {
-    UR_RULE(SIG_SYS_TICK, 0, battery_tick),
+    UR_RULE(SIG_SYS_TIMEOUT, 0, battery_tick),  /* Timer-driven, tickless */
     UR_RULE_END
 };
 
@@ -337,11 +348,11 @@ static void dispatch_task(void *arg)
     ur_entity_t **entities = (ur_entity_t **)arg;
 
     while (1) {
-        /* Dispatch all entities */
-        int processed = ur_dispatch_multi(entities, 4);
+        /* ur_run() handles dispatch + timeout checking */
+        int processed = ur_run(entities, 4, 0);
 
         if (processed == 0) {
-            /* No signals - try to sleep */
+            /* No signals - try to sleep (tickless idle with power management) */
             uint32_t next_event = ur_power_get_next_event_ms();
             if (next_event > 100) {
                 ur_power_idle(next_event);
@@ -349,19 +360,6 @@ static void dispatch_task(void *arg)
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
         }
-    }
-}
-
-static void battery_sim_task(void *arg)
-{
-    (void)arg;
-
-    while (1) {
-        /* Generate tick signal every second */
-        ur_signal_t tick = { .id = SIG_SYS_TICK, .src_id = 0 };
-        ur_emit(&g_battery_ent, tick);
-
-        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
@@ -460,7 +458,16 @@ void app_main(void)
     };
 
     xTaskCreate(dispatch_task, "dispatch", 4096, entities, 5, NULL);
-    xTaskCreate(battery_sim_task, "battery_sim", 2048, NULL, 3, NULL);
+
+    /* Create battery simulation timer (tickless - replaces battery_sim_task) */
+    static esp_timer_handle_t battery_timer = NULL;
+    esp_timer_create_args_t battery_timer_args = {
+        .callback = battery_timer_callback,
+        .arg = &g_battery_ent,
+        .name = "battery_timer",
+    };
+    esp_timer_create(&battery_timer_args, &battery_timer);
+    esp_timer_start_periodic(battery_timer, 1000000);  /* 1 second in microseconds */
 
     /* Simulate some actions after 5 seconds */
     vTaskDelay(pdMS_TO_TICKS(5000));

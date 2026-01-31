@@ -9,10 +9,16 @@
 3. [协程 API (ur_flow.h)](#3-协程-api)
 4. [管道 API (ur_pipe.h)](#4-管道-api)
 5. [工具函数 (ur_utils.h)](#5-工具函数)
-6. [中间件 (ur_transducers.c)](#6-中间件)
-7. [虫洞 API (ur_wormhole.c)](#7-虫洞-api)
-8. [监督者 API (ur_supervisor.c)](#8-监督者-api)
-9. [异常处理 (ur_panic.c)](#9-异常处理)
+6. [中间件 (ur_transducers.h)](#6-中间件)
+7. [Pub/Sub 总线 (ur_bus.h)](#7-pubsub-总线)
+8. [参数系统 (ur_param.h)](#8-参数系统)
+9. [访问控制 (ur_acl.h)](#9-访问控制)
+10. [电源管理 (ur_power.h)](#10-电源管理)
+11. [性能追踪 (ur_trace.h)](#11-性能追踪)
+12. [信号编解码 (ur_codec.h)](#12-信号编解码)
+13. [虫洞 API (ur_wormhole.h)](#13-虫洞-api)
+14. [监督者 API (ur_supervisor.h)](#14-监督者-api)
+15. [异常处理 (ur_panic.h)](#15-异常处理)
 
 ---
 
@@ -150,6 +156,21 @@ int ur_dispatch_multi(ur_entity_t **entities, size_t count);
 
 ---
 
+#### ur_run
+```c
+int ur_run(ur_entity_t **entities, size_t count, uint32_t idle_ms);
+```
+推荐的无滴答调度循环。轮询所有实体，检查 uFlow 超时，空闲时休眠。
+
+**参数**：
+- `entities`: 实体指针数组
+- `count`: 实体数量
+- `idle_ms`: 无信号时的空闲休眠时间
+
+**返回**：处理的信号总数
+
+---
+
 ### 状态管理
 
 #### ur_get_state
@@ -244,6 +265,14 @@ ur_entity_t *ur_get_entity(uint16_t id);
 
 ---
 
+#### ur_get_entity_count
+```c
+size_t ur_get_entity_count(void);
+```
+获取注册的实体数量。
+
+---
+
 ### 工具函数
 
 #### ur_inbox_count / ur_inbox_empty / ur_inbox_clear
@@ -283,11 +312,15 @@ struct ur_signal_s {
         uint8_t  u8[4];
         uint16_t u16[2];
         uint32_t u32[1];
+        int8_t   i8[4];
+        int16_t  i16[2];
+        int32_t  i32[1];
         float    f32;
     } payload;             // 4 字节载荷
     void *ptr;             // 扩展数据指针
     uint32_t timestamp;    // 时间戳
-};
+    uint32_t _reserved;    // 对齐填充
+} __attribute__((aligned(4)));
 ```
 
 ### ur_rule_t
@@ -296,7 +329,7 @@ struct ur_rule_s {
     uint16_t signal_id;    // 触发信号
     uint16_t next_state;   // 目标状态（0=不转换）
     ur_action_fn_t action; // 动作函数
-};
+} __attribute__((aligned(4)));
 ```
 
 ### ur_state_def_t
@@ -308,7 +341,8 @@ struct ur_state_def_s {
     ur_action_fn_t on_exit;
     const ur_rule_t *rules;
     uint8_t rule_count;
-};
+    uint8_t _reserved[3];
+} __attribute__((aligned(4)));
 ```
 
 ### ur_mixin_t
@@ -318,10 +352,11 @@ struct ur_mixin_s {
     const ur_rule_t *rules;
     uint8_t rule_count;
     uint8_t priority;
-};
+    uint8_t _reserved[2];
+} __attribute__((aligned(4)));
 ```
 
-### ur_middleware_t
+### ur_middleware_fn_t
 ```c
 typedef ur_mw_result_t (*ur_middleware_fn_t)(
     ur_entity_t *ent,
@@ -353,6 +388,38 @@ typedef enum {
     UR_ERR_ALREADY_EXISTS,
     UR_ERR_DISABLED,
 } ur_err_t;
+```
+
+### 系统信号
+```c
+enum {
+    SIG_NONE = 0x0000,
+    SIG_SYS_INIT = 0x0001,
+    SIG_SYS_ENTRY = 0x0002,
+    SIG_SYS_EXIT = 0x0003,
+    SIG_SYS_TICK = 0x0004,
+    SIG_SYS_TIMEOUT = 0x0005,
+    SIG_SYS_DYING = 0x0006,
+    SIG_SYS_REVIVE = 0x0007,
+    SIG_SYS_RESET = 0x0008,
+    SIG_SYS_SUSPEND = 0x0009,
+    SIG_SYS_RESUME = 0x000A,
+    SIG_PARAM_CHANGED = 0x0020,
+    SIG_PARAM_READY = 0x0021,
+    SIG_USER_BASE = 0x0100,
+};
+```
+
+### 实体标志位
+```c
+enum {
+    UR_FLAG_NONE = 0x00,
+    UR_FLAG_ACTIVE = 0x01,
+    UR_FLAG_SUSPENDED = 0x02,
+    UR_FLAG_FLOW_RUNNING = 0x04,
+    UR_FLAG_SUPERVISED = 0x08,
+    UR_FLAG_SUPERVISOR = 0x10,
+};
 ```
 
 ---
@@ -411,6 +478,14 @@ UR_AWAIT_COND(ent, condition);
 
 ---
 
+#### UR_EMIT_YIELD
+```c
+UR_EMIT_YIELD(ent, target, signal);
+```
+发送信号并让出执行。
+
+---
+
 #### UR_FLOW_GOTO
 ```c
 UR_FLOW_GOTO(ent, state_id);
@@ -445,6 +520,14 @@ UR_SCRATCH_CLEAR(ent);
 
 ---
 
+#### UR_SCRATCH_SIZE
+```c
+size_t size = UR_SCRATCH_SIZE();
+```
+获取暂存区大小。
+
+---
+
 #### UR_SCRATCH_STATIC_ASSERT
 ```c
 UR_SCRATCH_STATIC_ASSERT(my_type);
@@ -456,7 +539,7 @@ UR_SCRATCH_STATIC_ASSERT(my_type);
 ### 状态查询宏
 
 ```c
-UR_FLOW_IS_RUNNING(ent)      // 协程是否运行中
+UR_FLOW_IS_RUNNING(ent)       // 协程是否运行中
 UR_FLOW_IS_WAITING_SIGNAL(ent) // 是否等待信号
 UR_FLOW_IS_WAITING_TIME(ent)   // 是否等待时间
 UR_FLOW_GET_WAIT_SIGNAL(ent)   // 获取等待的信号 ID
@@ -508,6 +591,7 @@ ur_err_t ur_pipe_write_byte(ur_pipe_t *pipe, uint8_t byte);
 size_t ur_pipe_read(ur_pipe_t *pipe, void *buffer, size_t size, uint32_t timeout_ms);
 size_t ur_pipe_read_from_isr(ur_pipe_t *pipe, void *buffer, size_t size, BaseType_t *pxWoken);
 ur_err_t ur_pipe_read_byte(ur_pipe_t *pipe, uint8_t *byte, uint32_t timeout_ms);
+size_t ur_pipe_peek(ur_pipe_t *pipe, void *buffer, size_t size);
 ```
 
 ---
@@ -524,6 +608,14 @@ size_t ur_pipe_get_size(const ur_pipe_t *pipe);
 
 ---
 
+### 配置
+
+```c
+ur_err_t ur_pipe_set_trigger(ur_pipe_t *pipe, size_t trigger_level);
+```
+
+---
+
 ### 便捷宏
 
 ```c
@@ -535,7 +627,7 @@ UR_PIPE_INIT(name);                   // 初始化定义的管道
 
 ## 5. 工具函数
 
-### CRC8
+### CRC
 
 ```c
 uint8_t ur_crc8(const uint8_t *data, size_t len);
@@ -576,6 +668,15 @@ const char *ur_signal_name(uint16_t signal_id);  // weak
 
 ---
 
+### 内存操作
+
+```c
+void ur_memzero(void *ptr, size_t size);
+void ur_memcpy(void *dst, const void *src, size_t size);
+```
+
+---
+
 ### 辅助宏
 
 ```c
@@ -584,11 +685,18 @@ UR_SIGNAL_PTR(id, src, ptr)    // 创建带指针的信号
 UR_RULE(sig, next, action)     // 定义规则
 UR_RULE_END                    // 规则数组结束标记
 UR_STATE(id, parent, entry, exit, rules)  // 定义状态
-UR_SCRATCH(ent, type)          // 获取暂存区指针
+
 UR_ARRAY_SIZE(arr)             // 数组大小
 UR_MIN(a, b)
 UR_MAX(a, b)
 UR_CLAMP(x, lo, hi)
+UR_UNUSED(x)
+
+UR_BIT(n)                      // 1 << n
+UR_BIT_SET(x, b)
+UR_BIT_CLR(x, b)
+UR_BIT_TST(x, b)
+UR_BIT_TGL(x, b)
 ```
 
 ---
@@ -665,50 +773,534 @@ typedef struct {
 
 ---
 
-## 7. 虫洞 API
+## 7. Pub/Sub 总线
 
-### ur_wormhole_init
+### 初始化
+
 ```c
-ur_err_t ur_wormhole_init(uint8_t chip_id);
+ur_err_t ur_bus_init(void);
+void ur_bus_reset(void);
 ```
-初始化虫洞子系统。
 
 ---
 
-### ur_wormhole_deinit
+### 订阅管理
+
 ```c
+ur_err_t ur_subscribe(ur_entity_t *ent, uint16_t topic_id);
+ur_err_t ur_subscribe_id(uint16_t entity_id, uint16_t topic_id);
+ur_err_t ur_unsubscribe(ur_entity_t *ent, uint16_t topic_id);
+int ur_unsubscribe_all(ur_entity_t *ent);
+bool ur_is_subscribed(const ur_entity_t *ent, uint16_t topic_id);
+```
+
+---
+
+### 发布
+
+```c
+int ur_publish(ur_signal_t sig);
+int ur_publish_from_isr(ur_signal_t sig, BaseType_t *pxWoken);
+int ur_publish_u32(uint16_t topic_id, uint16_t src_id, uint32_t payload);
+int ur_publish_ptr(uint16_t topic_id, uint16_t src_id, void *ptr);
+```
+
+---
+
+### 查询
+
+```c
+size_t ur_bus_subscriber_count(uint16_t topic_id);
+size_t ur_bus_topic_count(void);
+void ur_bus_get_stats(ur_bus_stats_t *stats);
+void ur_bus_reset_stats(void);
+void ur_bus_dump(void);
+```
+
+---
+
+## 8. 参数系统
+
+### 参数类型
+
+```c
+typedef enum {
+    UR_PARAM_TYPE_U8,
+    UR_PARAM_TYPE_U16,
+    UR_PARAM_TYPE_U32,
+    UR_PARAM_TYPE_I8,
+    UR_PARAM_TYPE_I16,
+    UR_PARAM_TYPE_I32,
+    UR_PARAM_TYPE_F32,
+    UR_PARAM_TYPE_BOOL,
+    UR_PARAM_TYPE_STR,
+    UR_PARAM_TYPE_BLOB,
+} ur_param_type_t;
+```
+
+### 参数标志
+
+```c
+enum {
+    UR_PARAM_FLAG_PERSIST = 0x01,   // 保存到 Flash
+    UR_PARAM_FLAG_READONLY = 0x02,  // 只读
+    UR_PARAM_FLAG_NOTIFY = 0x04,    // 变更时通知
+    UR_PARAM_FLAG_DIRTY = 0x80,     // 已变更未保存
+};
+```
+
+---
+
+### 初始化
+
+```c
+ur_err_t ur_param_init(const ur_param_def_t *defs, size_t count,
+                       const ur_param_storage_t *storage);
+```
+
+---
+
+### 持久化
+
+```c
+int ur_param_load_all(void);
+int ur_param_save_all(void);
+ur_err_t ur_param_reset_defaults(bool persist);
+```
+
+---
+
+### 获取参数
+
+```c
+ur_err_t ur_param_get_u8(uint16_t id, uint8_t *value);
+ur_err_t ur_param_get_u16(uint16_t id, uint16_t *value);
+ur_err_t ur_param_get_u32(uint16_t id, uint32_t *value);
+ur_err_t ur_param_get_i8(uint16_t id, int8_t *value);
+ur_err_t ur_param_get_i16(uint16_t id, int16_t *value);
+ur_err_t ur_param_get_i32(uint16_t id, int32_t *value);
+ur_err_t ur_param_get_f32(uint16_t id, float *value);
+ur_err_t ur_param_get_bool(uint16_t id, bool *value);
+ur_err_t ur_param_get_str(uint16_t id, char *buffer, size_t buf_size);
+ur_err_t ur_param_get_blob(uint16_t id, void *buffer, size_t buf_size, size_t *out_len);
+```
+
+---
+
+### 设置参数
+
+```c
+ur_err_t ur_param_set_u8(uint16_t id, uint8_t value);
+ur_err_t ur_param_set_u16(uint16_t id, uint16_t value);
+ur_err_t ur_param_set_u32(uint16_t id, uint32_t value);
+ur_err_t ur_param_set_i8(uint16_t id, int8_t value);
+ur_err_t ur_param_set_i16(uint16_t id, int16_t value);
+ur_err_t ur_param_set_i32(uint16_t id, int32_t value);
+ur_err_t ur_param_set_f32(uint16_t id, float value);
+ur_err_t ur_param_set_bool(uint16_t id, bool value);
+ur_err_t ur_param_set_str(uint16_t id, const char *value);
+ur_err_t ur_param_set_blob(uint16_t id, const void *data, size_t len);
+```
+
+---
+
+### 批量操作
+
+```c
+void ur_param_batch_begin(void);
+int ur_param_commit(void);
+void ur_param_batch_abort(void);
+```
+
+---
+
+### 查询
+
+```c
+const ur_param_def_t *ur_param_get_def(uint16_t id);
+size_t ur_param_count(void);
+bool ur_param_exists(uint16_t id);
+bool ur_param_is_dirty(uint16_t id);
+void ur_param_dump(void);
+```
+
+---
+
+## 9. 访问控制
+
+### ACL 动作
+
+```c
+enum {
+    UR_ACL_DENY = 0,        // 阻止
+    UR_ACL_ALLOW,           // 允许
+    UR_ACL_LOG,             // 允许+记录
+    UR_ACL_TRANSFORM,       // 允许+转换
+};
+```
+
+### 特殊 ID
+
+```c
+#define UR_ACL_SRC_ANY      0x0000  // 任何源
+#define UR_ACL_SRC_LOCAL    0xFFFE  // 本地实体
+#define UR_ACL_SRC_EXTERNAL 0xFFFF  // 外部(RPC/虫洞)
+#define UR_ACL_SIG_ANY      0x0000  // 任何信号
+#define UR_ACL_SIG_SYSTEM   0x00FF  // 系统信号
+#define UR_ACL_SIG_USER     0xFFFF  // 用户信号
+```
+
+---
+
+### 初始化
+
+```c
+ur_err_t ur_acl_init(void);
+void ur_acl_reset(void);
+```
+
+---
+
+### 规则管理
+
+```c
+ur_err_t ur_acl_register(ur_entity_t *ent, const ur_acl_rule_t *rules, size_t count);
+ur_err_t ur_acl_add_rule(ur_entity_t *ent, const ur_acl_rule_t *rule);
+int ur_acl_remove_rules(ur_entity_t *ent, uint16_t src_id, uint16_t signal_id);
+void ur_acl_set_default(ur_entity_t *ent, ur_acl_default_t policy);
+void ur_acl_set_transform(ur_entity_t *ent, ur_acl_transform_fn_t fn, void *ctx);
+```
+
+---
+
+### 检查/过滤
+
+```c
+ur_acl_action_t ur_acl_check(const ur_entity_t *ent, const ur_signal_t *sig);
+bool ur_acl_filter(const ur_entity_t *ent, ur_signal_t *sig);
+```
+
+---
+
+### 中间件集成
+
+```c
+ur_mw_result_t ur_acl_middleware(ur_entity_t *ent, ur_signal_t *sig, void *ctx);
+ur_err_t ur_acl_enable_middleware(ur_entity_t *ent);
+```
+
+---
+
+### 统计/调试
+
+```c
+size_t ur_acl_rule_count(const ur_entity_t *ent);
+void ur_acl_get_stats(ur_acl_stats_t *stats);
+void ur_acl_reset_stats(void);
+void ur_acl_dump(const ur_entity_t *ent);
+```
+
+---
+
+### 便利宏
+
+```c
+UR_ACL_RULE(src, sig, act)
+UR_ACL_ALLOW_FROM(src)
+UR_ACL_DENY_FROM(src)
+UR_ACL_ALLOW_SIG(sig)
+UR_ACL_DENY_SIG(sig)
+UR_ACL_DENY_EXTERNAL()
+```
+
+---
+
+## 10. 电源管理
+
+### 电源模式
+
+```c
+enum {
+    UR_POWER_ACTIVE,        // 满功率
+    UR_POWER_IDLE,          // CPU 停止，外设活跃
+    UR_POWER_LIGHT_SLEEP,   // 浅睡眠
+    UR_POWER_DEEP_SLEEP,    // 深睡眠
+};
+```
+
+---
+
+### 初始化
+
+```c
+ur_err_t ur_power_init(const ur_power_hal_t *hal);
+```
+
+---
+
+### 锁管理
+
+```c
+ur_err_t ur_power_lock(ur_entity_t *ent, ur_power_mode_t mode);
+ur_err_t ur_power_unlock(ur_entity_t *ent, ur_power_mode_t mode);
+int ur_power_unlock_all(ur_entity_t *ent);
+bool ur_power_is_locked(ur_power_mode_t mode);
+```
+
+---
+
+### 休眠控制
+
+```c
+ur_power_mode_t ur_power_get_allowed_mode(void);
+uint32_t ur_power_idle(uint32_t timeout_ms);
+uint32_t ur_power_enter_mode(ur_power_mode_t mode, uint32_t timeout_ms, uint8_t wake_sources);
+```
+
+---
+
+### 事件管理
+
+```c
+void ur_power_set_next_event(ur_entity_t *ent, uint32_t time_ms);
+uint32_t ur_power_get_next_event_ms(void);
+```
+
+---
+
+### 统计
+
+```c
+void ur_power_get_stats(ur_power_stats_t *stats);
+void ur_power_reset_stats(void);
+const char *ur_power_mode_name(ur_power_mode_t mode);
+void ur_power_dump(void);
+```
+
+---
+
+### HAL 实现
+
+```c
+extern const ur_power_hal_t ur_power_hal_esp;   // ESP-IDF
+extern const ur_power_hal_t ur_power_hal_noop;  // 测试用
+```
+
+---
+
+## 11. 性能追踪
+
+### 追踪宏（禁用时零开销）
+
+```c
+UR_TRACE_INIT()
+UR_TRACE_START(ent_id, sig_id)
+UR_TRACE_END(ent_id, sig_id)
+UR_TRACE_TRANSITION(ent_id, from, to)
+UR_TRACE_SIGNAL(src, dst, sig)
+UR_TRACE_MARK(label)
+UR_TRACE_VALUE(name, val)
+UR_TRACE_FLUSH()
+```
+
+---
+
+### 初始化
+
+```c
+ur_err_t ur_trace_init(void);
+ur_err_t ur_trace_set_backend(const ur_trace_backend_t *backend);
+void ur_trace_set_format(ur_trace_format_t format);
+void ur_trace_enable(bool enable);
+bool ur_trace_is_enabled(void);
+```
+
+---
+
+### 追踪事件
+
+```c
+void ur_trace_dispatch_start(uint16_t entity_id, uint16_t signal_id);
+void ur_trace_dispatch_end(uint16_t entity_id, uint16_t signal_id);
+void ur_trace_state_transition(uint16_t entity_id, uint16_t from_state, uint16_t to_state);
+void ur_trace_signal_flow(uint16_t src_id, uint16_t dst_id, uint16_t signal_id);
+void ur_trace_marker(const char *label);
+void ur_trace_counter(const char *name, uint32_t value);
+void ur_trace_isr_enter(uint16_t isr_id);
+void ur_trace_isr_exit(uint16_t isr_id);
+void ur_trace_idle_enter(uint32_t expected_ms);
+void ur_trace_idle_exit(uint32_t actual_ms);
+```
+
+---
+
+### 输出控制
+
+```c
+void ur_trace_flush(void);
+void ur_trace_clear(void);
+void ur_trace_get_stats(ur_trace_stats_t *stats);
+void ur_trace_reset_stats(void);
+ur_err_t ur_trace_export(ur_trace_format_t format, void *buffer, size_t buf_size, size_t *out_len);
+size_t ur_trace_export_stream(ur_trace_format_t format, ur_trace_export_cb_t callback, void *ctx);
+```
+
+---
+
+### 元数据（用于 Scope）
+
+```c
+void ur_trace_register_entity_name(uint16_t entity_id, const char *name);
+void ur_trace_register_signal_name(uint16_t signal_id, const char *name);
+void ur_trace_register_state_name(uint16_t entity_id, uint16_t state_id, const char *name);
+void ur_trace_sync_metadata(void);
+void ur_trace_send_sysinfo(void);
+```
+
+---
+
+### 内置后端
+
+```c
+extern const ur_trace_backend_t ur_trace_backend_buffer;  // 环形缓冲
+extern const ur_trace_backend_t ur_trace_backend_uart;    // UART 输出
+extern const ur_trace_backend_t ur_trace_backend_rtt;     // SEGGER RTT
+```
+
+---
+
+## 12. 信号编解码
+
+### 字段类型
+
+```c
+enum {
+    UR_FIELD_U8, UR_FIELD_U16, UR_FIELD_U32,
+    UR_FIELD_I8, UR_FIELD_I16, UR_FIELD_I32, UR_FIELD_F32,
+    UR_FIELD_BOOL, UR_FIELD_STR, UR_FIELD_BYTES, UR_FIELD_ENUM,
+};
+```
+
+---
+
+### 初始化
+
+```c
+ur_err_t ur_codec_init(void);
+ur_err_t ur_codec_register_schema(const ur_codec_schema_t *schema);
+const ur_codec_schema_t *ur_codec_get_schema(uint16_t signal_id);
+```
+
+---
+
+### 编码
+
+```c
+ur_err_t ur_codec_encode_binary(const ur_signal_t *sig, uint8_t *buffer,
+                                 size_t buf_size, size_t *out_len);
+ur_err_t ur_codec_encode_json(const ur_signal_t *sig, char *buffer,
+                               size_t buf_size, size_t *out_len);
+ur_err_t ur_codec_encode(const ur_signal_t *sig, ur_codec_format_t format,
+                          void *buffer, size_t buf_size, size_t *out_len);
+```
+
+---
+
+### 解码
+
+```c
+ur_err_t ur_codec_decode_binary(const uint8_t *data, size_t len,
+                                 ur_codec_decode_result_t *result);
+ur_err_t ur_codec_decode_json(const char *json, ur_signal_t *sig);
+```
+
+---
+
+### 流式解码
+
+```c
+void ur_codec_decoder_init(ur_codec_decoder_t *decoder);
+ur_err_t ur_codec_decoder_feed(ur_codec_decoder_t *decoder, const uint8_t *data,
+                                size_t len, ur_signal_t *sig);
+void ur_codec_decoder_reset(ur_codec_decoder_t *decoder);
+```
+
+---
+
+### RPC
+
+```c
+void ur_rpc_set_recv_callback(ur_rpc_recv_fn_t callback);
+ur_err_t ur_rpc_process(const void *data, size_t len, ur_codec_format_t format,
+                         uint16_t target_id);
+```
+
+---
+
+### 工具
+
+```c
+uint16_t ur_crc16(const uint8_t *data, size_t len);
+void ur_codec_print_signal(const ur_signal_t *sig);
+```
+
+---
+
+## 13. 虫洞 API
+
+### 帧格式
+
+```c
+#define UR_WORMHOLE_SYNC_BYTE   0xAA
+#define UR_WORMHOLE_FRAME_SIZE  10
+
+typedef struct {
+    uint8_t sync;           // 0xAA
+    uint16_t src_id;        // 源实体 ID
+    uint16_t sig_id;        // 信号 ID
+    uint32_t payload;       // 4 字节载荷
+    uint8_t crc8;           // CRC8 校验
+} __attribute__((packed)) ur_wormhole_frame_t;
+```
+
+---
+
+### 初始化
+
+```c
+void ur_wormhole_init(uint8_t chip_id);
 ur_err_t ur_wormhole_deinit(void);
 ```
-关闭虫洞。
 
 ---
 
 ### 路由管理
 
 ```c
-ur_err_t ur_wormhole_add_route(uint16_t local_id, uint16_t remote_id, uint8_t channel);
+ur_err_t ur_wormhole_add_route(uint16_t local_id, uint16_t remote_id, uint8_t uart_num);
 ur_err_t ur_wormhole_remove_route(uint16_t local_id, uint16_t remote_id);
 ```
 
 ---
 
-### ur_wormhole_send
+### 发送/接收
+
 ```c
-ur_err_t ur_wormhole_send(uint16_t remote_id, ur_signal_t sig);
+ur_err_t ur_wormhole_send(uint16_t remote_id, const ur_signal_t *sig);
+ur_err_t ur_wormhole_recv_frame(const ur_wormhole_frame_t *frame);
 ```
-发送信号到远程实体。
 
 ---
 
-### ur_mw_wormhole_tx
+### 中间件
+
 ```c
 ur_mw_result_t ur_mw_wormhole_tx(ur_entity_t *ent, ur_signal_t *sig, void *ctx);
 ```
-虫洞发送中间件。
 
 ---
 
-## 8. 监督者 API
+## 14. 监督者 API
 
 ### ur_supervisor_create
 ```c
@@ -752,7 +1344,7 @@ ur_err_t ur_reset_restart_count(ur_entity_t *ent);
 
 ---
 
-## 9. 异常处理
+## 15. 异常处理
 
 ### 黑盒记录
 
@@ -794,3 +1386,4 @@ ur_mw_result_t ur_mw_blackbox(ur_entity_t *ent, ur_signal_t *sig, void *ctx);
 ---
 
 **文档版本**：v3.0
+**最后更新**：2026年1月

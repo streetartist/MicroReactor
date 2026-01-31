@@ -390,6 +390,56 @@ int ur_dispatch_multi(ur_entity_t **entities, size_t count)
     return total;
 }
 
+int ur_run(ur_entity_t **entities, size_t count, uint32_t idle_ms)
+{
+    /* Process all pending signals */
+    int processed = ur_dispatch_multi(entities, count);
+
+    /* Check time-based flows and send SIG_SYS_TIMEOUT */
+    uint32_t now = ur_get_time_ms();
+    for (size_t i = 0; i < count; i++) {
+        ur_entity_t *ent = entities[i];
+        if (ent == NULL) continue;
+        if (!(ent->flags & UR_FLAG_ACTIVE)) continue;
+
+        /* Case 1: Flow is running and waiting for time - check deadline */
+        if ((ent->flags & UR_FLAG_FLOW_RUNNING) &&
+            ent->flow_wait_until > 0 &&
+            now >= ent->flow_wait_until) {
+            ur_emit(ent, (ur_signal_t){ .id = SIG_SYS_TIMEOUT, .src_id = 0 });
+            processed++;
+            continue;
+        }
+
+        /* Case 2: Flow not started but state has SIG_SYS_TIMEOUT rule - auto start */
+        if (!(ent->flags & UR_FLAG_FLOW_RUNNING) &&
+            ent->flow_line == 0 &&
+            ur_inbox_empty(ent)) {
+            /* Check if current state responds to SIG_SYS_TIMEOUT */
+            const ur_state_def_t *state = find_state(ent, ent->current_state);
+            if (state != NULL && state->rules != NULL) {
+                for (uint8_t r = 0; r < state->rule_count; r++) {
+                    if (state->rules[r].signal_id == SIG_SYS_TIMEOUT) {
+                        /* State has timeout rule, send initial signal to start flow */
+                        ur_emit(ent, (ur_signal_t){ .id = SIG_SYS_TIMEOUT, .src_id = 0 });
+                        processed++;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /* Idle delay if nothing was processed */
+#if UR_CFG_USE_FREERTOS
+    if (processed == 0 && idle_ms > 0) {
+        vTaskDelay(pdMS_TO_TICKS(idle_ms));
+    }
+#endif
+
+    return processed;
+}
+
 /* ============================================================================
  * State Management
  * ========================================================================== */

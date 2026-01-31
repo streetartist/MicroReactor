@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "ur_core.h"
 #include "ur_flow.h"
@@ -184,7 +185,7 @@ static const ur_rule_t sensor_idle_rules[] = {
 };
 
 static const ur_rule_t sensor_measuring_rules[] = {
-    UR_RULE(SIG_SYS_TICK, STATE_SENSOR_IDLE, sensor_done_action),
+    UR_RULE(SIG_SYS_TIMEOUT, STATE_SENSOR_IDLE, sensor_done_action),
     UR_RULE(SIG_POLL, 0, sensor_poll_action),  /* Re-poll while measuring */
     UR_RULE_END
 };
@@ -360,31 +361,36 @@ static const ur_state_def_t display_states[] = {
 };
 
 /* ============================================================================
- * Tasks
+ * Tasks (Tickless)
  * ========================================================================== */
 
 static void dispatch_task(void *pvParameters)
 {
     ur_entity_t **entities = (ur_entity_t **)pvParameters;
 
-    ESP_LOGI(TAG, "Dispatch task started");
+    ESP_LOGI(TAG, "Dispatch task started (tickless mode)");
 
     while (1) {
-        /* Round-robin dispatch for all entities */
-        ur_dispatch_multi(entities, 3);
-        vTaskDelay(1);  /* Yield briefly */
+        /* ur_run() handles everything: dispatch + timeout checking + idle */
+        ur_run(entities, 3, 10);
     }
 }
 
-static void poll_task(void *pvParameters)
-{
-    ur_entity_t *sensor = (ur_entity_t *)pvParameters;
+/* Timer callback for periodic sensor polling (replaces poll_task) */
+static esp_timer_handle_t poll_timer = NULL;
 
-    while (1) {
-        /* Poll sensor every 2 seconds */
-        ur_signal_t poll = ur_signal_create(SIG_POLL, 0);
-        ur_emit(sensor, poll);
-        vTaskDelay(pdMS_TO_TICKS(2000));
+static void poll_timer_callback(void *arg)
+{
+    ur_entity_t *sensor = (ur_entity_t *)arg;
+
+    /* Send poll signal to sensor */
+    ur_signal_t poll = ur_signal_create(SIG_POLL, 0);
+    ur_emit(sensor, poll);
+
+    /* Also send timeout to transition sensor back to idle */
+    if (ur_in_state(sensor, STATE_SENSOR_MEASURING)) {
+        ur_signal_t timeout = ur_signal_create(SIG_SYS_TIMEOUT, 0);
+        ur_emit(sensor, timeout);
     }
 }
 
@@ -454,9 +460,17 @@ void app_main(void)
         &display_entity,
     };
 
-    /* Create tasks */
+    /* Create dispatch task */
     xTaskCreate(dispatch_task, "dispatch", 4096, entities, 5, NULL);
-    xTaskCreate(poll_task, "poll", 2048, &sensor_entity, 4, NULL);
 
-    ESP_LOGI(TAG, "System running. Simulating temperature readings...");
+    /* Create poll timer (tickless - replaces poll_task) */
+    esp_timer_create_args_t poll_timer_args = {
+        .callback = poll_timer_callback,
+        .arg = &sensor_entity,
+        .name = "poll_timer",
+    };
+    esp_timer_create(&poll_timer_args, &poll_timer);
+    esp_timer_start_periodic(poll_timer, 2000000);  /* 2 seconds in microseconds */
+
+    ESP_LOGI(TAG, "System running (tickless mode). Simulating temperature readings...");
 }

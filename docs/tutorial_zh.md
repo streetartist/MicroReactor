@@ -12,11 +12,17 @@
 6. [中间件管道](#6-中间件管道)
 7. [混入系统](#7-混入系统)
 8. [数据管道](#8-数据管道)
-9. [分布式通信（虫洞）](#9-分布式通信虫洞)
-10. [监督者与自愈](#10-监督者与自愈)
-11. [实战案例](#11-实战案例)
-12. [最佳实践](#12-最佳实践)
-13. [常见问题](#13-常见问题)
+9. [Pub/Sub 消息总线](#9-pubsub-消息总线)
+10. [参数系统](#10-参数系统)
+11. [访问控制列表](#11-访问控制列表)
+12. [电源管理](#12-电源管理)
+13. [分布式通信（虫洞）](#13-分布式通信虫洞)
+14. [监督者与自愈](#14-监督者与自愈)
+15. [性能追踪](#15-性能追踪)
+16. [信号编解码](#16-信号编解码)
+17. [实战案例](#17-实战案例)
+18. [最佳实践](#18-最佳实践)
+19. [常见问题](#19-常见问题)
 
 ---
 
@@ -89,13 +95,31 @@ struct ur_entity_s {
     uint16_t id;              // 实体 ID
     uint16_t current_state;   // 当前状态
     uint8_t flags;            // 标志位
+    uint8_t mixin_count;      // 混入数量
+    uint8_t middleware_count; // 中间件数
 
     const ur_state_def_t *states;  // 状态定义数组
     uint8_t state_count;           // 状态数量
+    uint8_t initial_state;         // 初始状态ID
+
+    // 混入
+    const ur_mixin_t *mixins[UR_CFG_MAX_MIXINS_PER_ENTITY];
+
+    // 中间件链
+    ur_middleware_t middleware[UR_CFG_MAX_MIDDLEWARE];
+
+    // uFlow 协程状态
+    uint16_t flow_line;       // Duff device 行号
+    uint16_t flow_wait_sig;   // 等待的信号 ID
+    uint32_t flow_wait_until; // 超时时间戳
+
+    // 暂存区
+    uint8_t scratch[UR_CFG_SCRATCHPAD_SIZE];
+
+    // 监督者支持
+    uint16_t supervisor_id;   // 父监督者 ID
 
     QueueHandle_t inbox;      // 信号收件箱
-    uint8_t scratch[64];      // 协程暂存区
-
     void *user_data;          // 用户数据
     const char *name;         // 实体名称
 };
@@ -106,7 +130,7 @@ struct ur_entity_s {
 信号是实体间通信的唯一方式，采用"发后即忘"（fire-and-forget）模式：
 
 ```c
-// 信号结构（20 字节）
+// 信号结构（20 字节，4 字节对齐）
 struct ur_signal_s {
     uint16_t id;              // 信号 ID
     uint16_t src_id;          // 发送者实体 ID
@@ -114,12 +138,15 @@ struct ur_signal_s {
         uint8_t  u8[4];
         uint16_t u16[2];
         uint32_t u32[1];
+        int8_t   i8[4];
+        int16_t  i16[2];
+        int32_t  i32[1];
         float    f32;
     } payload;                // 4 字节内联载荷
     void *ptr;                // 扩展数据指针
     uint32_t timestamp;       // 时间戳
     uint32_t _reserved;       // 对齐填充
-};
+} __attribute__((aligned(4)));
 ```
 
 信号设计原则：
@@ -256,8 +283,22 @@ void setup_entity(void) {
 ### 3.3 调度循环
 
 ```c
-// 方式一：阻塞式调度（推荐用于专用任务）
+// 方式一：推荐的无滴答调度循环
 void dispatch_task(void *param) {
+    ur_entity_t *entities[] = { &entity1, &entity2, &entity3 };
+
+    while (1) {
+        // ur_run() 执行以下步骤:
+        // 1. 轮询所有实体的收件箱
+        // 2. 调度每个实体一个信号
+        // 3. 检查 uFlow 超时（SIG_SYS_TIMEOUT）
+        // 4. 若无信号处理，idle 指定毫秒数
+        ur_run(entities, 3, 100);  // 空闲时休眠 100ms
+    }
+}
+
+// 方式二：阻塞式调度（单实体）
+void single_dispatch_task(void *param) {
     ur_entity_t *ent = (ur_entity_t *)param;
 
     while (1) {
@@ -266,7 +307,7 @@ void dispatch_task(void *param) {
     }
 }
 
-// 方式二：非阻塞轮询（适合主循环）
+// 方式三：非阻塞轮询（适合主循环）
 void main_loop(void) {
     while (1) {
         // 处理所有待处理信号
@@ -277,7 +318,7 @@ void main_loop(void) {
     }
 }
 
-// 方式三：多实体调度
+// 方式四：多实体轮询调度
 void multi_dispatch_task(void *param) {
     ur_entity_t *entities[] = {&entity1, &entity2, &entity3};
 
@@ -348,7 +389,7 @@ static const ur_state_def_t hsm_states[] = {
 框架预定义了一些系统信号（0x0000 - 0x00FF）：
 
 ```c
-typedef enum {
+enum {
     SIG_NONE = 0x0000,          // 空信号
     SIG_SYS_INIT = 0x0001,      // 实体初始化
     SIG_SYS_ENTRY = 0x0002,     // 状态进入
@@ -361,8 +402,11 @@ typedef enum {
     SIG_SYS_SUSPEND = 0x0009,   // 暂停
     SIG_SYS_RESUME = 0x000A,    // 恢复
 
+    SIG_PARAM_CHANGED = 0x0020, // 参数变更通知
+    SIG_PARAM_READY = 0x0021,   // 参数系统就绪
+
     SIG_USER_BASE = 0x0100,     // 用户信号起始
-} ur_sys_signal_t;
+};
 ```
 
 ### 4.2 创建信号
@@ -574,7 +618,7 @@ uint16_t counting_action(ur_entity_t *ent, const ur_signal_t *sig) {
         ESP_LOGI(TAG, "计数: %d, 累计: %.2f", s->counter, s->accumulated);
     }
 
-    ESP_LOGI(TAG, "完成！耗时: %d ms", ur_time_ms() - s->start_time);
+    ESP_LOGI(TAG, "完成！耗时: %lu ms", ur_time_ms() - s->start_time);
 
     UR_FLOW_END(ent);
 }
@@ -984,6 +1028,9 @@ ur_err_t err = ur_pipe_read_byte(&pipe, &byte, timeout_ms);
 
 // ISR 中读取
 size_t read = ur_pipe_read_from_isr(&pipe, buffer, size, &woken);
+
+// 查看数据（不移除）
+size_t peeked = ur_pipe_peek(&pipe, buffer, size);
 ```
 
 ### 8.5 状态查询
@@ -1009,59 +1056,381 @@ if (ur_pipe_is_full(&pipe)) {
 size_t total = ur_pipe_get_size(&pipe);
 ```
 
-### 8.6 完整示例：音频流
+---
+
+## 9. Pub/Sub 消息总线
+
+### 9.1 总线概念
+
+Pub/Sub 总线提供基于主题的消息分发，替代 O(N) 广播：
+
+- 发布者无需知道订阅者
+- 支持多对多通信
+- 高效的主题路由
+
+### 9.2 使用总线
 
 ```c
-// 音频配置
-#define SAMPLE_RATE     16000
-#define SAMPLE_SIZE     2       // 16-bit
-#define BUFFER_MS       100     // 100ms 缓冲
-#define BUFFER_SIZE     (SAMPLE_RATE * SAMPLE_SIZE * BUFFER_MS / 1000)
+#include "ur_bus.h"
 
-// 静态分配
-static uint8_t audio_buffer[BUFFER_SIZE];
-static ur_pipe_t audio_pipe;
+// 定义主题（使用信号 ID 作为主题）
+enum {
+    TOPIC_TEMPERATURE = SIG_USER_BASE + 100,
+    TOPIC_HUMIDITY,
+    TOPIC_ALARM,
+};
 
-// ADC 中断 - 生产者
-static void IRAM_ATTR adc_isr_handler(void *arg) {
-    int16_t sample = adc_read();
-    BaseType_t woken = pdFALSE;
+// 初始化总线
+ur_bus_init();
 
-    ur_pipe_write_from_isr(&audio_pipe, &sample, sizeof(sample), &woken);
+// 订阅主题
+ur_subscribe(&sensor_entity, TOPIC_TEMPERATURE);
+ur_subscribe(&display_entity, TOPIC_TEMPERATURE);
+ur_subscribe(&logger_entity, TOPIC_TEMPERATURE);
 
-    portYIELD_FROM_ISR(woken);
+// 取消订阅
+ur_unsubscribe(&display_entity, TOPIC_TEMPERATURE);
+
+// 取消所有订阅
+ur_unsubscribe_all(&entity);
+
+// 检查订阅状态
+if (ur_is_subscribed(&entity, TOPIC_TEMPERATURE)) {
+    // 已订阅
 }
+```
 
-// 音频处理任务 - 消费者
-static void audio_task(void *param) {
-    int16_t samples[64];
+### 9.3 发布消息
 
-    while (1) {
-        // 等待至少 64 个样本
-        size_t read = ur_pipe_read(&audio_pipe, samples,
-                                    sizeof(samples), portMAX_DELAY);
+```c
+// 基本发布
+ur_signal_t sig = ur_signal_create(TOPIC_TEMPERATURE, ent->id);
+sig.payload.f32 = 25.5f;
+int count = ur_publish(sig);  // 返回收到消息的订阅者数量
 
-        if (read > 0) {
-            process_audio(samples, read / sizeof(int16_t));
-        }
-    }
-}
+// 带 u32 载荷发布
+int count = ur_publish_u32(TOPIC_TEMPERATURE, ent->id, temperature_raw);
+
+// 带指针发布
+int count = ur_publish_ptr(TOPIC_ALARM, ent->id, &alarm_data);
+
+// ISR 中发布
+BaseType_t woken = pdFALSE;
+int count = ur_publish_from_isr(sig, &woken);
+portYIELD_FROM_ISR(woken);
+```
+
+### 9.4 查询和统计
+
+```c
+// 获取主题订阅者数
+size_t count = ur_bus_subscriber_count(TOPIC_TEMPERATURE);
+
+// 获取总主题数
+size_t topics = ur_bus_topic_count();
+
+// 获取统计信息
+ur_bus_stats_t stats;
+ur_bus_get_stats(&stats);
+
+// 重置统计
+ur_bus_reset_stats();
+
+// 调试输出
+ur_bus_dump();
+```
+
+---
+
+## 10. 参数系统
+
+### 10.1 参数概念
+
+参数系统提供类型安全的 KV 存储：
+
+- 支持多种数据类型
+- 可持久化到 Flash
+- 变更通知机制
+- 批量操作
+
+### 10.2 定义参数
+
+```c
+#include "ur_param.h"
+
+// 参数 ID
+enum {
+    PARAM_BRIGHTNESS = 1,
+    PARAM_VOLUME,
+    PARAM_WIFI_SSID,
+    PARAM_CALIBRATION,
+};
+
+// 参数定义
+static const ur_param_def_t param_defs[] = {
+    {
+        .id = PARAM_BRIGHTNESS,
+        .type = UR_PARAM_TYPE_U8,
+        .name = "brightness",
+        .default_val.u8 = 50,
+        .flags = UR_PARAM_FLAG_PERSIST,  // 持久化
+    },
+    {
+        .id = PARAM_VOLUME,
+        .type = UR_PARAM_TYPE_U8,
+        .name = "volume",
+        .default_val.u8 = 80,
+        .flags = UR_PARAM_FLAG_PERSIST | UR_PARAM_FLAG_NOTIFY,  // 持久化+通知
+    },
+    {
+        .id = PARAM_WIFI_SSID,
+        .type = UR_PARAM_TYPE_STR,
+        .name = "wifi_ssid",
+        .default_val.str = "MyNetwork",
+        .flags = UR_PARAM_FLAG_PERSIST,
+    },
+    {
+        .id = PARAM_CALIBRATION,
+        .type = UR_PARAM_TYPE_F32,
+        .name = "calibration",
+        .default_val.f32 = 1.0f,
+        .flags = UR_PARAM_FLAG_READONLY,  // 只读
+    },
+};
+```
+
+### 10.3 初始化和持久化
+
+```c
+// 存储后端（例如 NVS）
+static const ur_param_storage_t nvs_storage = {
+    .load = nvs_load_param,
+    .save = nvs_save_param,
+    .erase = nvs_erase_param,
+};
 
 // 初始化
-void audio_init(void) {
-    ur_pipe_init(&audio_pipe, audio_buffer, sizeof(audio_buffer),
-                 64 * sizeof(int16_t));  // 64 样本触发
+ur_param_init(param_defs, 4, &nvs_storage);
 
-    // 配置 ADC 定时器中断...
-    xTaskCreate(audio_task, "audio", 4096, NULL, 10, NULL);
+// 加载所有持久化参数
+int loaded = ur_param_load_all();
+
+// 保存所有脏参数
+int saved = ur_param_save_all();
+
+// 恢复默认值
+ur_param_reset_defaults(true);  // true = 同时持久化
+```
+
+### 10.4 读写参数
+
+```c
+// 读取
+uint8_t brightness;
+ur_param_get_u8(PARAM_BRIGHTNESS, &brightness);
+
+uint8_t volume;
+ur_param_get_u8(PARAM_VOLUME, &volume);
+
+char ssid[64];
+ur_param_get_str(PARAM_WIFI_SSID, ssid, sizeof(ssid));
+
+float calibration;
+ur_param_get_f32(PARAM_CALIBRATION, &calibration);
+
+// 写入
+ur_param_set_u8(PARAM_BRIGHTNESS, 75);
+ur_param_set_str(PARAM_WIFI_SSID, "NewNetwork");
+
+// 批量操作（减少持久化次数）
+ur_param_batch_begin();
+ur_param_set_u8(PARAM_BRIGHTNESS, 50);
+ur_param_set_u8(PARAM_VOLUME, 60);
+ur_param_set_str(PARAM_WIFI_SSID, "Network");
+int count = ur_param_commit();  // 一次性保存
+```
+
+### 10.5 变更通知
+
+当设置了 `UR_PARAM_FLAG_NOTIFY` 的参数变化时，框架会广播 `SIG_PARAM_CHANGED` 信号：
+
+```c
+// 处理参数变更
+static uint16_t handle_param_changed(ur_entity_t *ent, const ur_signal_t *sig) {
+    uint16_t param_id = sig->payload.u16[0];
+
+    switch (param_id) {
+        case PARAM_VOLUME:
+            uint8_t volume;
+            ur_param_get_u8(PARAM_VOLUME, &volume);
+            set_audio_volume(volume);
+            break;
+    }
+    return 0;
+}
+
+// 在规则中处理
+static const ur_rule_t rules[] = {
+    UR_RULE(SIG_PARAM_CHANGED, 0, handle_param_changed),
+    UR_RULE_END
+};
+```
+
+---
+
+## 11. 访问控制列表
+
+### 11.1 ACL 概念
+
+ACL 提供信号级别的访问控制：
+
+- 基于来源的过滤
+- 基于信号的过滤
+- 默认策略配置
+- 信号转换支持
+
+### 11.2 定义规则
+
+```c
+#include "ur_acl.h"
+
+// 规则定义
+static const ur_acl_rule_t sensor_acl[] = {
+    // 允许来自控制器的所有信号
+    UR_ACL_ALLOW_FROM(ENT_CONTROLLER),
+
+    // 拒绝来自外部的信号
+    UR_ACL_DENY_FROM(UR_ACL_SRC_EXTERNAL),
+
+    // 允许特定信号
+    UR_ACL_ALLOW_SIG(SIG_SYS_TICK),
+    UR_ACL_ALLOW_SIG(SIG_SYS_TIMEOUT),
+
+    // 拒绝敏感信号
+    UR_ACL_DENY_SIG(SIG_FACTORY_RESET),
+};
+```
+
+### 11.3 配置 ACL
+
+```c
+// 初始化 ACL 系统
+ur_acl_init();
+
+// 注册规则
+ur_acl_register(&sensor_entity, sensor_acl, 5);
+
+// 设置默认策略
+ur_acl_set_default(&sensor_entity, UR_ACL_DEFAULT_DENY);  // 默认拒绝
+// 或
+ur_acl_set_default(&sensor_entity, UR_ACL_DEFAULT_ALLOW); // 默认允许
+
+// 动态添加规则
+ur_acl_rule_t new_rule = UR_ACL_ALLOW_FROM(ENT_NEW_DEVICE);
+ur_acl_add_rule(&sensor_entity, &new_rule);
+
+// 移除规则
+ur_acl_remove_rules(&sensor_entity, ENT_OLD_DEVICE, UR_ACL_SIG_ANY);
+
+// 启用 ACL 中间件
+ur_acl_enable_middleware(&sensor_entity);
+```
+
+### 11.4 手动检查
+
+```c
+// 检查信号是否允许
+ur_acl_action_t action = ur_acl_check(&entity, &signal);
+if (action == UR_ACL_DENY) {
+    ESP_LOGW(TAG, "信号被拒绝");
+}
+
+// 过滤信号（可能修改）
+if (!ur_acl_filter(&entity, &signal)) {
+    // 信号被过滤
 }
 ```
 
 ---
 
-## 9. 分布式通信（虫洞）
+## 12. 电源管理
 
-### 9.1 虫洞概念
+### 12.1 电源概念
+
+电源管理使用投票机制控制功耗模式：
+
+- 实体通过锁声明功耗需求
+- 框架自动计算允许的最低功耗模式
+- 支持事件驱动的无滴答设计
+
+### 12.2 电源模式
+
+```c
+enum {
+    UR_POWER_ACTIVE,        // 满功率运行
+    UR_POWER_IDLE,          // CPU 停止，外设活跃
+    UR_POWER_LIGHT_SLEEP,   // 浅睡眠
+    UR_POWER_DEEP_SLEEP,    // 深睡眠
+};
+```
+
+### 12.3 使用电源管理
+
+```c
+#include "ur_power.h"
+
+// 初始化
+ur_power_init(&ur_power_hal_esp);
+
+// 获取电源锁（防止进入低功耗）
+ur_power_lock(&wifi_entity, UR_POWER_ACTIVE);  // WiFi 需要满功率
+ur_power_lock(&sensor_entity, UR_POWER_IDLE);  // 传感器只需要外设
+
+// 释放电源锁
+ur_power_unlock(&wifi_entity, UR_POWER_ACTIVE);
+
+// 释放所有锁
+ur_power_unlock_all(&wifi_entity);
+
+// 检查锁状态
+if (ur_power_is_locked(UR_POWER_ACTIVE)) {
+    // 有实体持有 ACTIVE 锁
+}
+
+// 获取允许的最低功耗模式
+ur_power_mode_t allowed = ur_power_get_allowed_mode();
+
+// 进入低功耗
+uint32_t slept_ms = ur_power_enter_mode(allowed, 1000, WAKE_GPIO | WAKE_TIMER);
+
+// 空闲处理
+uint32_t slept_ms = ur_power_idle(100);  // 最多休眠 100ms
+```
+
+### 12.4 事件管理
+
+```c
+// 设置下一个事件时间（用于无滴答设计）
+ur_power_set_next_event(&entity, ur_time_ms() + 1000);
+
+// 获取最近的事件时间
+uint32_t next_event = ur_power_get_next_event_ms();
+
+// 调度循环中使用
+while (1) {
+    ur_run(entities, count, idle_ms);
+
+    // 或者手动管理
+    uint32_t wait_time = ur_power_get_next_event_ms() - ur_time_ms();
+    ur_power_idle(wait_time);
+}
+```
+
+---
+
+## 13. 分布式通信（虫洞）
+
+### 13.1 虫洞概念
 
 虫洞（Wormhole）实现跨芯片的透明信号路由，让分布式系统看起来像单机系统：
 
@@ -1074,7 +1443,7 @@ void audio_init(void) {
 └─────────────┘                        └─────────────┘
 ```
 
-### 9.2 协议格式
+### 13.2 协议格式
 
 10 字节定长帧：
 
@@ -1087,15 +1456,10 @@ void audio_init(void) {
 
 CRC8 覆盖 SrcID + SigID + Payload（字节 1-8）。
 
-### 9.3 配置虫洞
+### 13.3 配置虫洞
 
 ```c
 #include "ur_wormhole.h"
-
-// 在 menuconfig 中启用：
-// CONFIG_UR_WORMHOLE_ENABLE=y
-// CONFIG_UR_WORMHOLE_UART_NUM=1
-// CONFIG_UR_WORMHOLE_BAUD_RATE=115200
 
 void setup_wormhole(void) {
     // 初始化（chip_id 用于标识本机）
@@ -1109,69 +1473,22 @@ void setup_wormhole(void) {
 }
 ```
 
-### 9.4 发送远程信号
+### 13.4 发送和接收
 
 ```c
-// 方式一：通过路由表自动发送
+// 发送到远程实体
 ur_signal_t sig = ur_signal_create(SIG_COMMAND, local_entity.id);
-ur_wormhole_send(100, sig);  // 发送到远程实体 100
+ur_wormhole_send(100, &sig);  // 发送到远程实体 100
 
-// 方式二：使用中间件自动路由
-// 注册虫洞 TX 中间件后，发送到本地代理实体的信号会自动转发
-ur_register_middleware(&proxy_entity, ur_mw_wormhole_tx, NULL, 0);
-ur_emit(&proxy_entity, sig);  // 自动转发到远程
-```
-
-### 9.5 接收远程信号
-
-虫洞 RX 任务自动运行，收到的远程信号会注入到本地实体的收件箱：
-
-```c
-// 远程芯片发送：
-ur_signal_t sig = ur_signal_create(SIG_SENSOR_DATA, remote_entity.id);
-ur_wormhole_send(1, sig);  // 发送到远程实体 1
-
-// 本地芯片收到后，信号自动进入 entity 1 的收件箱
-// 本地的 entity 1 正常处理，就像是本地信号一样
-```
-
-### 9.6 多芯片系统示例
-
-```
-芯片 A（主控）              芯片 B（传感器）
-  ┌──────────┐               ┌──────────┐
-  │ Entity 1 │◀─────────────▶│ Entity 10│ 温度传感器
-  │ 显示控制 │               │          │
-  └──────────┘               └──────────┘
-  ┌──────────┐               ┌──────────┐
-  │ Entity 2 │◀─────────────▶│ Entity 11│ 湿度传感器
-  │ 数据记录 │               │          │
-  └──────────┘               └──────────┘
-```
-
-```c
-// 芯片 A 配置
-void chip_a_init(void) {
-    ur_wormhole_init(0);  // 芯片 ID = 0
-
-    ur_wormhole_add_route(1, 10, UART_NUM_1);  // Entity 1 <-> 远程 10
-    ur_wormhole_add_route(2, 11, UART_NUM_1);  // Entity 2 <-> 远程 11
-}
-
-// 芯片 B 配置
-void chip_b_init(void) {
-    ur_wormhole_init(1);  // 芯片 ID = 1
-
-    ur_wormhole_add_route(10, 1, UART_NUM_1);  // Entity 10 <-> 远程 1
-    ur_wormhole_add_route(11, 2, UART_NUM_1);  // Entity 11 <-> 远程 2
-}
+// 接收自动处理
+// 虫洞 RX 任务自动运行，收到的远程信号会注入到本地实体的收件箱
 ```
 
 ---
 
-## 10. 监督者与自愈
+## 14. 监督者与自愈
 
-### 10.1 监督者概念
+### 14.1 监督者概念
 
 监督者模式来自 Erlang/OTP，提供：
 - 实体故障检测
@@ -1192,15 +1509,10 @@ void chip_b_init(void) {
 └───────┘  └───────┘  └───────┘
 ```
 
-### 10.2 配置监督者
+### 14.2 配置监督者
 
 ```c
 #include "ur_supervisor.h"
-
-// 在 menuconfig 中启用：
-// CONFIG_UR_SUPERVISOR_ENABLE=y
-// CONFIG_UR_SUPERVISOR_MAX_CHILDREN=8
-// CONFIG_UR_SUPERVISOR_RESTART_DELAY_MS=100
 
 static ur_entity_t supervisor;
 static ur_entity_t worker1, worker2, worker3;
@@ -1231,28 +1543,23 @@ void setup_supervisor(void) {
 }
 ```
 
-### 10.3 报告故障
+### 14.3 报告故障
 
 ```c
 // 工作实体检测到错误时报告
 static uint16_t handle_error(ur_entity_t *ent, const ur_signal_t *sig) {
     uint32_t error_code = sig->payload.u32[0];
 
-    ESP_LOGE(TAG, "[%s] 发生错误: 0x%08X", ur_entity_name(ent), error_code);
+    ESP_LOGE(TAG, "[%s] 发生错误: 0x%08lX", ur_entity_name(ent), error_code);
 
     // 报告故障，触发监督者重启流程
     ur_report_dying(ent, error_code);
 
     return 0;
 }
-
-// 或者手动触发
-void trigger_failure(ur_entity_t *ent) {
-    ur_report_dying(ent, ERROR_CODE_WATCHDOG_TIMEOUT);
-}
 ```
 
-### 10.4 重启流程
+### 14.4 重启流程
 
 当子实体报告故障：
 
@@ -1276,25 +1583,105 @@ static uint16_t handle_revive(ur_entity_t *ent, const ur_signal_t *sig) {
 }
 ```
 
-### 10.5 查询和重置
+---
+
+## 15. 性能追踪
+
+### 15.1 追踪概念
+
+追踪系统支持 Chrome/Perfetto 兼容格式：
+
+- 调度时间线
+- 状态转换
+- 信号流向
+- 自定义标记
+
+### 15.2 使用追踪
 
 ```c
-// 获取重启次数
-uint8_t count = ur_get_restart_count(&worker1);
-ESP_LOGI(TAG, "Worker1 已重启 %d 次", count);
+#include "ur_trace.h"
 
-// 重置重启计数（例如在成功运行一段时间后）
-ur_reset_restart_count(&worker1);
+// 初始化
+ur_trace_init();
+ur_trace_set_backend(&ur_trace_backend_uart);  // 或 _buffer, _rtt
+ur_trace_set_format(UR_TRACE_FORMAT_BINARY);
+ur_trace_enable(true);
 
-// 移除子实体
-ur_supervisor_remove_child(&supervisor, &worker1);
+// 注册元数据（用于 Scope 显示）
+ur_trace_register_entity_name(ENT_LED, "LED");
+ur_trace_register_signal_name(SIG_BUTTON, "BUTTON");
+ur_trace_register_state_name(ENT_LED, STATE_ON, "On");
+ur_trace_sync_metadata();
+
+// 追踪宏（禁用时零开销）
+UR_TRACE_START(ent_id, sig_id);
+UR_TRACE_END(ent_id, sig_id);
+UR_TRACE_TRANSITION(ent_id, from_state, to_state);
+UR_TRACE_SIGNAL(src_id, dst_id, sig_id);
+UR_TRACE_MARK("checkpoint");
+UR_TRACE_VALUE("temperature", temp);
+
+// 导出数据
+size_t len;
+ur_trace_export(UR_TRACE_FORMAT_JSON, buffer, sizeof(buffer), &len);
 ```
 
 ---
 
-## 11. 实战案例
+## 16. 信号编解码
 
-### 11.1 智能灯控制器
+### 16.1 编解码概念
+
+编解码用于序列化/反序列化信号：
+
+- 二进制格式（紧凑）
+- JSON 格式（调试友好）
+- 流式解码
+
+### 16.2 使用编解码
+
+```c
+#include "ur_codec.h"
+
+// 初始化
+ur_codec_init();
+
+// 编码为二进制
+uint8_t buffer[256];
+size_t len;
+ur_codec_encode_binary(&signal, buffer, sizeof(buffer), &len);
+
+// 编码为 JSON
+char json[256];
+ur_codec_encode_json(&signal, json, sizeof(json), &len);
+
+// 解码二进制
+ur_codec_decode_result_t result;
+ur_codec_decode_binary(buffer, len, &result);
+
+// 解码 JSON
+ur_signal_t decoded;
+ur_codec_decode_json(json, &decoded);
+
+// 流式解码（用于 UART 接收）
+ur_codec_decoder_t decoder;
+ur_codec_decoder_init(&decoder);
+
+void uart_rx_handler(uint8_t *data, size_t len) {
+    ur_signal_t sig;
+    ur_err_t err = ur_codec_decoder_feed(&decoder, data, len, &sig);
+    if (err == UR_OK) {
+        // 完整信号已解码
+        ur_emit(&target, sig);
+    }
+}
+```
+
+---
+
+## 17. 实战案例
+
+### 17.1 智能灯控制器
 
 ```c
 /**
@@ -1307,7 +1694,6 @@ enum {
     SIG_BUTTON_LONG,                    // 长按
     SIG_BRIGHTNESS_UP,                  // 亮度+
     SIG_BRIGHTNESS_DOWN,                // 亮度-
-    SIG_TIMER_TICK,                     // 定时器 tick
 };
 
 // 状态定义
@@ -1339,26 +1725,6 @@ static uint16_t turn_off(ur_entity_t *ent, const ur_signal_t *sig) {
     s->brightness = 0;
     set_pwm_duty(0);
     ESP_LOGI(TAG, "灯已关闭");
-    return 0;
-}
-
-static uint16_t start_timer(ur_entity_t *ent, const ur_signal_t *sig) {
-    light_scratch_t *s = UR_SCRATCH_PTR(ent, light_scratch_t);
-    s->timer_remaining = 300;  // 5 分钟
-    ESP_LOGI(TAG, "定时关闭已启动：%d 秒", s->timer_remaining);
-    return STATE_TIMER_ACTIVE;
-}
-
-static uint16_t timer_tick(ur_entity_t *ent, const ur_signal_t *sig) {
-    light_scratch_t *s = UR_SCRATCH_PTR(ent, light_scratch_t);
-
-    if (s->timer_remaining > 0) {
-        s->timer_remaining--;
-        if (s->timer_remaining == 0) {
-            ESP_LOGI(TAG, "定时结束，关灯");
-            return STATE_OFF;
-        }
-    }
     return 0;
 }
 
@@ -1400,65 +1766,20 @@ static const ur_rule_t on_rules[] = {
 };
 
 static const ur_rule_t dimming_rules[] = {
-    UR_RULE(SIG_TIMER_TICK, 0, dimming_flow),  // 用 tick 驱动协程
-    UR_RULE(SIG_BUTTON_SHORT, STATE_ON, NULL), // 取消调光
+    UR_RULE(SIG_SYS_TIMEOUT, 0, dimming_flow),  // 用 timeout 驱动协程
+    UR_RULE(SIG_BUTTON_SHORT, STATE_ON, NULL),   // 取消调光
     UR_RULE_END
-};
-
-static const ur_rule_t timer_rules[] = {
-    UR_RULE(SIG_TIMER_TICK, 0, timer_tick),
-    UR_RULE(SIG_BUTTON_SHORT, STATE_ON, cancel_timer),
-    UR_RULE_END
-};
-
-static const ur_state_def_t light_states[] = {
-    UR_STATE(STATE_OFF, 0, NULL, turn_off, off_rules),
-    UR_STATE(STATE_ON, 0, NULL, NULL, on_rules),
-    UR_STATE(STATE_DIMMING, STATE_ON, NULL, NULL, dimming_rules),
-    UR_STATE(STATE_TIMER_ACTIVE, STATE_ON, NULL, NULL, timer_rules),
 };
 ```
 
-### 11.2 传感器数据采集系统
+### 17.2 传感器数据采集系统
 
 ```c
 /**
  * 多传感器系统：采集、处理、上报
  */
 
-// 实体定义
-static ur_entity_t sensor_mgr;    // 传感器管理器
-static ur_entity_t data_logger;   // 数据记录器
-static ur_entity_t uploader;      // 数据上传器
-
-// 传感器管理器状态
-enum {
-    STATE_MGR_IDLE = 1,
-    STATE_MGR_SAMPLING,
-    STATE_MGR_ERROR,
-};
-
-// 信号
-enum {
-    SIG_START_SAMPLE = SIG_USER_BASE,
-    SIG_SAMPLE_DONE,
-    SIG_DATA_READY,
-    SIG_UPLOAD_OK,
-    SIG_UPLOAD_FAIL,
-    SIG_RETRY,
-};
-
-// 采样数据结构
-typedef struct {
-    float temperature;
-    float humidity;
-    float pressure;
-    uint32_t timestamp;
-} sensor_data_t;
-
-static sensor_data_t current_data;
-
-// 传感器管理器 - 采样协程
+// 采样协程
 static uint16_t sampling_flow(ur_entity_t *ent, const ur_signal_t *sig) {
     UR_FLOW_BEGIN(ent);
 
@@ -1481,53 +1802,10 @@ static uint16_t sampling_flow(ur_entity_t *ent, const ur_signal_t *sig) {
              current_data.humidity,
              current_data.pressure);
 
-    // 通知数据记录器
-    ur_signal_t data_sig = ur_signal_create_ptr(SIG_DATA_READY, ent->id, &current_data);
-    ur_emit(&data_logger, data_sig);
-    ur_emit(&uploader, data_sig);
+    // 发布到总线
+    ur_publish_ptr(TOPIC_SENSOR_DATA, ent->id, &current_data);
 
-    UR_FLOW_GOTO(ent, STATE_MGR_IDLE);
-
-    UR_FLOW_END(ent);
-}
-
-// 上传器 - 带重试的上传
-typedef struct {
-    uint8_t retry_count;
-    sensor_data_t data_to_upload;
-} uploader_scratch_t;
-
-static uint16_t upload_flow(ur_entity_t *ent, const ur_signal_t *sig) {
-    uploader_scratch_t *s = UR_SCRATCH_PTR(ent, uploader_scratch_t);
-
-    UR_FLOW_BEGIN(ent);
-
-    // 保存要上传的数据
-    if (sig->ptr != NULL) {
-        memcpy(&s->data_to_upload, sig->ptr, sizeof(sensor_data_t));
-    }
-    s->retry_count = 0;
-
-    while (s->retry_count < 3) {
-        ESP_LOGI(TAG, "尝试上传 (第 %d 次)...", s->retry_count + 1);
-
-        bool success = http_post_data(&s->data_to_upload);
-
-        if (success) {
-            ESP_LOGI(TAG, "上传成功！");
-            ur_emit(&sensor_mgr, ur_signal_create(SIG_UPLOAD_OK, ent->id));
-            UR_FLOW_GOTO(ent, STATE_UPLOAD_IDLE);
-        }
-
-        s->retry_count++;
-        ESP_LOGW(TAG, "上传失败，等待重试...");
-
-        // 指数退避
-        UR_AWAIT_TIME(ent, 1000 * (1 << s->retry_count));
-    }
-
-    ESP_LOGE(TAG, "上传失败，已达最大重试次数");
-    ur_emit(&sensor_mgr, ur_signal_create(SIG_UPLOAD_FAIL, ent->id));
+    UR_FLOW_GOTO(ent, STATE_IDLE);
 
     UR_FLOW_END(ent);
 }
@@ -1535,9 +1813,9 @@ static uint16_t upload_flow(ur_entity_t *ent, const ur_signal_t *sig) {
 
 ---
 
-## 12. 最佳实践
+## 18. 最佳实践
 
-### 12.1 内存管理
+### 18.1 内存管理
 
 ```c
 // ✅ 好：静态分配
@@ -1559,7 +1837,7 @@ void send_data(void) {
 }
 ```
 
-### 12.2 状态机设计
+### 18.2 状态机设计
 
 ```c
 // ✅ 好：状态职责单一
@@ -1585,7 +1863,7 @@ static const ur_state_def_t states[] = {
 UR_STATE(STATE_CONNECTED, 0, open_connection, close_connection, rules)
 ```
 
-### 12.3 信号设计
+### 18.3 信号设计
 
 ```c
 // ✅ 好：信号语义清晰
@@ -1612,63 +1890,9 @@ ur_emit(&target, temp_signal);
 ur_emit(&target, humidity_signal);  // 可能乱序！
 ```
 
-### 12.4 协程使用
-
-```c
-// ✅ 好：简单线性流程用协程
-uint16_t init_sequence(ur_entity_t *ent, const ur_signal_t *sig) {
-    UR_FLOW_BEGIN(ent);
-
-    init_hardware();
-    UR_AWAIT_TIME(ent, 100);
-
-    calibrate_sensor();
-    UR_AWAIT_SIGNAL(ent, SIG_CALIBRATION_DONE);
-
-    start_normal_operation();
-
-    UR_FLOW_END(ent);
-}
-
-// ❌ 坏：复杂分支逻辑用协程
-uint16_t complex_flow(ur_entity_t *ent, const ur_signal_t *sig) {
-    UR_FLOW_BEGIN(ent);
-
-    // 复杂的嵌套条件和循环...
-    // 应该拆分成多个状态！
-
-    UR_FLOW_END(ent);
-}
-```
-
-### 12.5 中间件使用
-
-```c
-// ✅ 好：中间件职责单一
-ur_register_middleware(&ent, logger_mw, NULL, 0);
-ur_register_middleware(&ent, debounce_mw, &debounce_ctx, 1);
-ur_register_middleware(&ent, auth_mw, &auth_ctx, 2);
-
-// ✅ 好：中间件优先级合理
-// 0: 日志（最先，记录所有）
-// 1: 认证（过滤未授权）
-// 2: 防抖（减少重复）
-// 3: 业务处理
-
-// ❌ 坏：在中间件中做太多事
-ur_mw_result_t bad_middleware(ur_entity_t *ent, ur_signal_t *sig, void *ctx) {
-    log_signal(sig);
-    check_auth(sig);
-    debounce(sig);
-    transform(sig);
-    // 应该拆分成多个中间件！
-    return UR_MW_CONTINUE;
-}
-```
-
 ---
 
-## 13. 常见问题
+## 19. 常见问题
 
 ### Q1: 信号丢失怎么办？
 
@@ -1698,7 +1922,7 @@ if (ur_inbox_count(&ent) > UR_CFG_INBOX_SIZE * 0.8) {
 ```c
 // 协程需要信号驱动
 static const ur_rule_t rules[] = {
-    UR_RULE(SIG_TICK, 0, my_flow_action),  // 用 tick 驱动
+    UR_RULE(SIG_SYS_TIMEOUT, 0, my_flow_action),  // 用 timeout 驱动
     UR_RULE_END
 };
 ```
@@ -1730,24 +1954,14 @@ void IRAM_ATTR my_isr(void *arg) {
 ```c
 // 启用日志
 // CONFIG_UR_ENABLE_LOGGING=y
-// CONFIG_UR_LOG_LEVEL=4
 
 // 使用日志中间件
 ur_register_middleware(&ent, ur_mw_logger, &logger_ctx, 0);
 
-// 注册 panic 钩子查看历史
-void my_panic_hook(const char *reason,
-                   const ur_blackbox_entry_t *history,
-                   size_t count) {
-    for (size_t i = 0; i < count; i++) {
-        ESP_LOGE(TAG, "[%d] ent=%d sig=0x%04X state=%d",
-                 i, history[i].entity_id,
-                 history[i].signal_id,
-                 history[i].state);
-    }
-}
-
-ur_panic_set_hook(my_panic_hook);
+// 使用追踪系统
+ur_trace_init();
+ur_trace_set_backend(&ur_trace_backend_uart);
+ur_trace_enable(true);
 ```
 
 ### Q6: 内存不够用？
@@ -1756,7 +1970,7 @@ ur_panic_set_hook(my_panic_hook);
 1. 减小 `CONFIG_UR_INBOX_SIZE`
 2. 减小 `CONFIG_UR_SCRATCHPAD_SIZE`
 3. 减少 `CONFIG_UR_MAX_MIDDLEWARE`
-4. 禁用不需要的功能（HSM、Wormhole、Supervisor）
+4. 禁用不需要的功能（HSM、Wormhole、Supervisor 等）
 
 ---
 
@@ -1771,13 +1985,26 @@ ur_panic_set_hook(my_panic_hook);
 | `UR_INBOX_SIZE` | 8 | 收件箱队列大小 |
 | `UR_SCRATCHPAD_SIZE` | 64 | 协程暂存区大小 |
 | `UR_MAX_MIDDLEWARE` | 8 | 最大中间件数 |
+| `UR_SIGNAL_PAYLOAD_SIZE` | 4 | 信号内联载荷大小 |
 | `UR_ENABLE_HSM` | y | 启用层级状态机 |
 | `UR_ENABLE_LOGGING` | n | 启用调试日志 |
 | `UR_ENABLE_TIMESTAMPS` | y | 启用信号时间戳 |
+| `UR_PIPE_ENABLE` | y | 启用数据管道 |
+| `UR_BUS_ENABLE` | y | 启用 Pub/Sub 总线 |
+| `UR_PARAM_ENABLE` | y | 启用参数系统 |
+| `UR_CODEC_ENABLE` | y | 启用编解码 |
+| `UR_POWER_ENABLE` | y | 启用电源管理 |
+| `UR_TRACE_ENABLE` | n | 启用性能追踪 |
+| `UR_ACL_ENABLE` | y | 启用访问控制 |
 | `UR_WORMHOLE_ENABLE` | n | 启用虫洞 |
 | `UR_SUPERVISOR_ENABLE` | n | 启用监督者 |
-| `UR_PANIC_ENABLE` | y | 启用 panic 处理 |
-| `UR_PIPE_ENABLE` | y | 启用数据管道 |
+| `UR_BUS_MAX_TOPICS` | 64 | 最大主题数 |
+| `UR_BUS_MAX_SUBSCRIBERS` | 8 | 每主题最大订阅者 |
+| `UR_PARAM_MAX_COUNT` | 32 | 最大参数数 |
+| `UR_PARAM_MAX_STRING_LEN` | 64 | 参数字符串最大长度 |
+| `UR_ACL_MAX_RULES` | 32 | 最大 ACL 规则数 |
+| `UR_TRACE_BUFFER_SIZE` | 4096 | 追踪缓冲区大小 |
+| `UR_TRACE_MAX_ENTRIES` | 256 | 最大追踪事件数 |
 
 ---
 

@@ -154,6 +154,28 @@ int ur_dispatch_all(ur_entity_t *ent);
  */
 int ur_dispatch_multi(ur_entity_t **entities, size_t count);
 
+/**
+ * @brief Tickless dispatch loop iteration (recommended)
+ *
+ * Single-call dispatch loop that:
+ * 1. Processes all pending signals from all entities
+ * 2. Automatically sends SIG_SYS_TIMEOUT to flows waiting on UR_AWAIT_TIME
+ * 3. Delays briefly if no signals were processed
+ *
+ * Usage:
+ * @code
+ * while (1) {
+ *     ur_run(entities, count, 10);  // 10ms idle delay
+ * }
+ * @endcode
+ *
+ * @param entities  Array of entity pointers
+ * @param count     Number of entities
+ * @param idle_ms   Delay in ms when no signals processed (0 = no delay)
+ * @return Total signals processed
+ */
+int ur_run(ur_entity_t **entities, size_t count, uint32_t idle_ms);
+
 /* ============================================================================
  * State Management
  * ========================================================================== */

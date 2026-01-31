@@ -36,7 +36,6 @@ enum {
     SIG_BUTTON_PRESS = SIG_USER_BASE,
     SIG_BUTTON_RELEASE,
     SIG_TOGGLE_MODE,
-    SIG_TICK,
 };
 
 /* ============================================================================
@@ -84,7 +83,7 @@ static const ur_rule_t idle_rules[] = {
 /* State: BLINKING */
 static const ur_rule_t blinking_rules[] = {
     UR_RULE(SIG_BUTTON_PRESS, STATE_IDLE, action_stop_blinking),
-    UR_RULE(SIG_TICK, 0, action_blink_flow),
+    UR_RULE(SIG_SYS_TIMEOUT, 0, action_blink_flow),  /* Timeout drives the flow */
     UR_RULE(SIG_TOGGLE_MODE, STATE_SOLID_ON, action_led_on),
     UR_RULE_END
 };
@@ -165,9 +164,11 @@ static uint16_t action_led_off(ur_entity_t *ent, const ur_signal_t *sig)
  * @brief Blink action using uFlow coroutine
  *
  * This demonstrates the uFlow coroutine pattern for timing.
+ * Uses UR_AWAIT_TIME for tickless timing - no periodic tick task needed.
  */
 static uint16_t action_blink_flow(ur_entity_t *ent, const ur_signal_t *sig)
 {
+    (void)sig;
     blink_scratch_t *s = UR_SCRATCH_PTR(ent, blink_scratch_t);
 
     UR_FLOW_BEGIN(ent);
@@ -178,15 +179,15 @@ static uint16_t action_blink_flow(ur_entity_t *ent, const ur_signal_t *sig)
         set_led(true);
         s->blink_count++;
 
-        /* Wait for next tick (500ms handled by tick task) */
-        UR_AWAIT_SIGNAL(ent, SIG_TICK);
+        /* Wait 500ms (tickless - driven by SIG_SYS_TIMEOUT) */
+        UR_AWAIT_TIME(ent, 500);
 
         /* LED OFF */
         s->led_state = false;
         set_led(false);
 
-        /* Wait for next tick */
-        UR_AWAIT_SIGNAL(ent, SIG_TICK);
+        /* Wait 500ms */
+        UR_AWAIT_TIME(ent, 500);
     }
 
     UR_FLOW_END(ent);
@@ -214,37 +215,19 @@ static void IRAM_ATTR button_isr_handler(void *arg)
 }
 
 /* ============================================================================
- * Tick Task
- * ========================================================================== */
-
-static void tick_task(void *pvParameters)
-{
-    ur_entity_t *ent = (ur_entity_t *)pvParameters;
-
-    while (1) {
-        /* Send tick signal every 500ms when blinking */
-        if (ur_in_state(ent, STATE_BLINKING)) {
-            ur_signal_t tick = ur_signal_create(SIG_TICK, 0);
-            ur_emit(ent, tick);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-}
-
-/* ============================================================================
- * Dispatch Task
+ * Dispatch Task (Tickless)
  * ========================================================================== */
 
 static void dispatch_task(void *pvParameters)
 {
     ur_entity_t *ent = (ur_entity_t *)pvParameters;
+    ur_entity_t *entities[] = { ent };
 
-    ESP_LOGI(TAG, "Dispatch task started");
+    ESP_LOGI(TAG, "Dispatch task started (tickless mode)");
 
     while (1) {
-        /* Block until a signal is available, then process it */
-        ur_dispatch(ent, portMAX_DELAY);
+        /* ur_run() handles everything: dispatch + timeout checking + idle */
+        ur_run(entities, 1, 100);
     }
 }
 
@@ -320,11 +303,8 @@ void app_main(void)
 
     ESP_LOGI(TAG, "LED entity started in state %d", ur_get_state(&led_entity));
 
-    /* Create dispatch task */
+    /* Create dispatch task (tickless - no separate tick task needed) */
     xTaskCreate(dispatch_task, "dispatch", 4096, &led_entity, 5, NULL);
 
-    /* Create tick task for blink timing */
-    xTaskCreate(tick_task, "tick", 2048, &led_entity, 4, NULL);
-
-    ESP_LOGI(TAG, "System running. Press boot button to control LED.");
+    ESP_LOGI(TAG, "System running (tickless mode). Press boot button to control LED.");
 }
